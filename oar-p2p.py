@@ -1,6 +1,12 @@
+import json
+import math
 import asyncio
 import argparse
-import json
+
+from collections import defaultdict
+from dataclasses import dataclass
+
+NFT_TABLE_NAME = "oar-p2p"
 
 MACHINE_INTERFACES = {
     "alakazam-01": None,
@@ -70,35 +76,172 @@ class LatencyMatrix:
         # Assert matrix is square
         size = len(matrix)
         for row in matrix:
-            assert len(row) == size, f"Matrix must be square: expected {size} columns, got {len(row)}"
+            assert (
+                len(row) == size
+            ), f"Matrix must be square: expected {size} columns, got {len(row)}"
         self.matrix = matrix
-    
+
     @staticmethod
-    def read_from_file(file_path: str) -> 'LatencyMatrix':
+    def read_from_file(file_path: str) -> "LatencyMatrix":
         """Read a latency matrix from a file and return as LatencyMatrix instance."""
         matrix = []
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith('#'):  # Skip empty lines and comments
+                if line and not line.startswith("#"):  # Skip empty lines and comments
                     row = [float(x) for x in line.split()]
                     matrix.append(row)
         return LatencyMatrix(matrix)
-    
+
     def get_latency(self, src_idx: int, dst_idx: int) -> float:
         """Get the latency value from source index to destination index."""
         return self.matrix[src_idx][dst_idx]
-    
+
     def size(self) -> int:
         """Get the size of the square matrix."""
         return len(self.matrix)
 
 
-def address_from_index(index: int) -> str:
-    d = index % 254
-    c = (index // 254) % 254
-    assert c <= 254
-    return f"10.0.{c}.{d+1}"
+@dataclass
+class MachineConfiguration:
+    machine: str
+    nft_script: str
+    tc_commands: list[str]
+    ip_commands: list[str]
+
+
+def machine_get_interface(machine: str) -> str:
+    interface = MACHINE_INTERFACES.get(machine, None)
+    assert interface is not None, f"machine interface not configured: {machine}"
+    return interface
+
+
+def machine_generate_configurations(
+    machines: list[str], num_addresses: int, matrix: LatencyMatrix
+) -> list[MachineConfiguration]:
+    configurations = []
+
+    machine_addr_idxs = defaultdict(list)
+
+    for i in range(num_addresses):
+        machine = machines[i % len(machines)]
+        machine_addr_idxs[machine].append(i)
+
+    for machine in machines:
+        interface = machine_get_interface(machine)
+        addr_idxs = machine_addr_idxs[machine]
+        ip_commands = []
+        tc_commands = []
+
+        ip_commands.append(f"route add 10.0.0.0/8 dev {interface}")
+        for addr_idx in addr_idxs:
+            ip_commands.append(
+                f"addr add {address_from_index(addr_idx)}/32 dev {interface}"
+            )
+
+        latencies_set = set()
+        latencies_buckets = defaultdict(list)
+        for addr_idx in addr_idxs:
+            for i in range(num_addresses):
+                if addr_idx == i:
+                    continue
+                latency = matrix.get_latency(addr_idx, i)
+                latency_rounded = math.ceil(latency) // 1
+                latencies_set.add(latency_rounded)
+                latencies_buckets[latency_rounded].append((addr_idx, i))
+
+        latencies = list(sorted(latencies_set))
+
+        tc_commands.append(f"qdisc add dev {interface} root handle 1: htb default 9999")
+        tc_commands.append(
+            f"class add dev {interface} parent 1: classid 1:9999 htb rate 10gbit"
+        )
+        for idx, latency in enumerate(latencies):
+            # tc class for latency at idx X is X + 1
+            tc_commands.append(
+                f"class add dev {interface} parent 1: classid 1:{idx+1} htb rate 10gbit"
+            )
+            tc_commands.append(
+                f"qdisc add dev {interface} parent 1:{idx+1} handle {idx+2}: netem delay {latency}ms"
+            )
+            # mark for latency at idx X is X + 1
+            tc_commands.append(
+                f"filter add dev {interface} parent 1:0 prio 1 handle {idx+1} fw flowid 1:{idx+1}"
+            )
+
+        nft_script = ""
+        nft_script += "table ip oar-p2p {" + "\n"
+        for latency_idx, latency in enumerate(latencies):
+            if len(latencies_buckets[latency]) == 0:
+                continue
+            nft_script += f"  set mark_{latency_idx}_pairs {{\n"
+            nft_script += f"    type ipv4_addr . ipv4_addr\n"
+            nft_script += f"    flags interval\n"
+            nft_script += f"    elements = {{\n"
+            for src_idx, dst_idx in latencies_buckets[latency]:
+                assert src_idx != dst_idx
+                src_addr = address_from_index(src_idx)
+                dst_addr = address_from_index(dst_idx)
+                nft_script += f"      {src_addr} . {dst_addr},\n"
+            nft_script += f"    }}\n"
+            nft_script += f"  }}\n\n"
+
+        nft_script += "    chain postrouting {\n"
+        nft_script += "        type filter hook postrouting priority mangle - 1\n"
+        nft_script += "        policy accept\n"
+        nft_script += "\n"
+        for latency_idx in range(len(latencies)):
+            nft_script += f"        ip saddr . ip daddr @mark_{latency_idx}_pairs meta mark set {latency_idx+1}\n"
+        nft_script += "    }" + "\n"
+        nft_script += "}" + "\n"
+
+        configurations.append(
+            MachineConfiguration(
+                machine=machine,
+                nft_script=nft_script,
+                tc_commands=tc_commands,
+                ip_commands=ip_commands,
+            )
+        )
+
+    return configurations
+
+
+async def machine_apply_configuration(job_id: int, config: MachineConfiguration):
+    """Apply a machine configuration by executing IP commands, TC commands, and NFT script."""
+    machine = config.machine
+
+    print(f"Applying configuration to {machine}...")
+
+    # Prepare tasks for parallel execution
+    tasks = []
+
+    # IP commands task
+    if config.ip_commands:
+        ip_batch = "\n".join(config.ip_commands)
+        print(f"Executing {len(config.ip_commands)} IP commands on {machine}")
+        tasks.append(run_script_in_docker(job_id, machine, "ip -b -", ip_batch))
+
+    # TC commands task
+    if config.tc_commands:
+        tc_batch = "\n".join(config.tc_commands)
+        print(f"Executing {len(config.tc_commands)} TC commands on {machine}")
+        tasks.append(run_script_in_docker(job_id, machine, "tc -b -", tc_batch))
+
+    # NFT script task
+    if config.nft_script:
+        print(f"Applying NFT script on {machine}")
+        tasks.append(
+            run_script_in_docker(job_id, machine, "nft -f -", config.nft_script)
+        )
+
+    # Execute all tasks in parallel
+    if tasks:
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            print(f"ERROR applying configuration to {machine}: {e}")
+            raise
 
 
 async def oar_job_list_machines(job_id: int) -> list[str]:
@@ -121,14 +264,14 @@ async def oar_job_list_machines(job_id: int) -> list[str]:
     return data[str(job_id)]["assigned_network_address"]
 
 
-async def run_script_in_docker(job_id: int, machine: str, script: str, stdin_data: str = None) -> str:
-    # Prepare the full script with package installation
+async def run_script_in_docker(
+    job_id: int, machine: str, script: str, stdin_data: str | None = None
+) -> str:
+    # Prepare the script (no package installation needed with custom image)
     if stdin_data:
         # If stdin_data is provided, create a script that pipes it to the command
         full_script = f"""#!/bin/bash
 set -e
-apk update >/dev/null 2>&1
-apk add iproute2 iproute2-tc >/dev/null 2>&1
 cat << 'STDIN_EOF' | {script}
 {stdin_data}
 STDIN_EOF
@@ -136,27 +279,45 @@ STDIN_EOF
     else:
         full_script = f"""#!/bin/bash
 set -e
-apk update >/dev/null 2>&1
-apk add iproute2 iproute2-tc >/dev/null 2>&1
 {script}
 """
-    
-    # Run the script in an Alpine Docker container via SSH
+
+    # Run the script in our custom networking Docker container via SSH
     proc = await asyncio.create_subprocess_exec(
-        "oarsh", machine,
-        "docker", "run", "--rm", "--privileged", "--net=host",
-        "-i", "alpine:latest", "sh",
+        "oarsh",
+        machine,
+        "docker",
+        "run",
+        "--rm",
+        "--privileged",
+        "--pull=always",
+        "--net=host",
+        "-i",
+        "ghcr.io/diogo464/oar-p2p-networking:latest",
         env={"OAR_JOB_ID": str(job_id)},
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    
+
     stdout, stderr = await proc.communicate(input=full_script.encode())
-    
+
     if proc.returncode != 0:
-        raise Exception(f"Script execution failed on {machine}: {stderr.decode()}")
-    
+        cmd_args = [
+            "oarsh",
+            machine,
+            "docker",
+            "run",
+            "--rm",
+            "--privileged",
+            "--net=host",
+            "-i",
+            "ghcr.io/diogo464/oar-p2p-networking:latest",
+        ]
+        raise Exception(
+            f"Script execution failed on {machine}\nCommand: {' '.join(cmd_args)}\nScript: {script}\nStderr: {stderr.decode()}"
+        )
+
     return stdout.decode()
 
 
@@ -170,166 +331,185 @@ def machine_interface(name: str) -> str:
 
     return interface
 
-async def machine_prepare_interface(job_id: int, machine: str):
+
+async def machine_cleanup_interface(job_id: int, machine: str):
     interface = machine_interface(machine)
-    
+
     # Get interface information
     get_addr_script = f"ip -j addr show {interface}"
     stdout = await run_script_in_docker(job_id, machine, get_addr_script)
-    
+
     if not stdout.strip():
-        print(f"No interface info for {machine}, skipping prepare")
+        print(f"No interface info for {machine}, skipping cleanup")
         return
-    
+
     # Parse JSON output
     interface_data = json.loads(stdout)
-    
+
     # Extract addresses that start with '10.'
     commands = []
     for iface in interface_data:
         if "addr_info" in iface:
             for addr in iface["addr_info"]:
-                if addr.get("family") == "inet" and addr.get("local", "").startswith("10."):
+                if addr.get("family") == "inet" and addr.get("local", "").startswith(
+                    "10."
+                ):
                     ip = addr["local"]
                     commands.append(f"ip addr del {ip}/32 dev {interface}")
-    
+
     # Remove 10.0.0.0/8 route if it exists
     commands.append(f"ip route del 10.0.0.0/8 dev {interface} 2>/dev/null || true")
-    
+
     if len(commands) == 1:  # Only the route command
         print(f"No 10.x addresses to remove from {machine}, only cleaning up route")
     else:
         print(f"Removing {len(commands)-1} addresses and route from {machine}")
-    
-    # Execute batch commands
+
+    # Execute batch commands and clean TC state and NFT table in parallel
     remove_script = "\n".join(commands)
-    await run_script_in_docker(job_id, machine, remove_script)
-    
-    # Remove existing tc qdiscs separately (ignore errors)
-    await run_script_in_docker(job_id, machine, f"tc qdisc del dev {interface} root 2>/dev/null || true")
-    
+    tasks = [
+        run_script_in_docker(job_id, machine, remove_script),
+        run_script_in_docker(
+            job_id, machine, f"tc qdisc del dev {interface} root 2>/dev/null || true"
+        ),
+        run_script_in_docker(
+            job_id, machine, f"tc qdisc del dev {interface} ingress 2>/dev/null || true"
+        ),
+        run_script_in_docker(
+            job_id, machine, f"nft delete table {NFT_TABLE_NAME} 2>/dev/null || true"
+        ),
+    ]
+    await asyncio.gather(*tasks)
+
     # Small delay to ensure cleanup is complete
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.2)
 
 
-async def machine_configure_interface(job_id: int, machine: str, address_indices: list[int]):
-    interface = machine_interface(machine)
-    
-    if not address_indices:
-        return  # No addresses to add
-    
-    # Generate IP addresses from indices
-    ip_addresses = [address_from_index(idx) for idx in address_indices]
-    
-    # Prepare ip commands without the 'ip' prefix for batch execution
-    commands = []
-    for ip in ip_addresses:
-        commands.append(f"addr add {ip}/32 dev {interface}")
-    
-    # Add route for 10.0.0.0/8
-    commands.append(f"route add 10.0.0.0/8 dev {interface}")
-    
-    print(f"Adding {len(ip_addresses)} addresses and route to {machine}")
-    
-    # Execute batch commands using ip -b -
-    commands_data = "\n".join(commands)
-    await run_script_in_docker(job_id, machine, "ip -b -", commands_data)
+async def setup_command(job_id: int, addresses: int, latency_matrix_path: str):
+    # Load latency matrix
+    latency_matrix = LatencyMatrix.read_from_file(latency_matrix_path)
+
+    # Get machines from job
+    machines = await oar_job_list_machines(job_id)
+
+    print(f"Machines: {machines}")
+    print(f"Total addresses: {addresses}")
+
+    # Generate configurations for all machines
+    configurations = machine_generate_configurations(
+        machines, addresses, latency_matrix
+    )
+
+    # Apply configurations to each machine in parallel
+    async def setup_machine(config: MachineConfiguration):
+        if config.machine == "charmander-2":
+            return
+        print(f"Setting up {config.machine}...")
+
+        # First cleanup the interface
+        await machine_cleanup_interface(job_id, config.machine)
+
+        # Then apply the new configuration
+        await machine_apply_configuration(job_id, config)
+
+    # Run all machines in parallel
+    tasks = [setup_machine(config) for config in configurations]
+    await asyncio.gather(*tasks)
 
 
-async def machine_configure_latencies(job_id: int, machine: str, address_indices: list[int], latency_matrix: LatencyMatrix):
-    interface = machine_interface(machine)
-    
-    if not address_indices:
-        return  # No addresses to configure
-    
-    # Generate tc commands for latency configuration (without 'tc' prefix)
-    commands = []
-    
-    # Create root qdisc with enough bands for our rules
-    max_bands = min(len(address_indices) * latency_matrix.size(), 16)  # prio qdisc supports max 16 bands
-    commands.append(f"qdisc add dev {interface} root handle 1: prio bands {max_bands}")
-    
-    # For each src->dst pair, create a simple netem rule
-    filter_counter = 1
-    band_counter = 1
-    for src_idx in address_indices:
-        src_ip = address_from_index(src_idx)
-        
-        for dst_idx in range(latency_matrix.size()):
-            if src_idx != dst_idx and src_idx < latency_matrix.size() and dst_idx < latency_matrix.size():  # Skip self-to-self and out-of-bounds
-                dst_ip = address_from_index(dst_idx)
-                latency = latency_matrix.get_latency(src_idx, dst_idx)
-                
-                # Use bands cyclically since prio has limited bands
-                band = (band_counter % max_bands) + 1
-                
-                # Create a unique handle for this rule (must be different from root handle)
-                handle = f"{filter_counter + 100}:"
-                
-                # Add netem qdisc to the appropriate band
-                commands.append(f"qdisc add dev {interface} parent 1:{band} handle {handle} netem delay {latency}ms")
-                
-                # Add filter to match traffic from src_ip to dst_ip
-                commands.append(f"filter add dev {interface} protocol ip parent 1: prio {filter_counter} u32 match ip src {src_ip} match ip dst {dst_ip} flowid 1:{band}")
-                
-                filter_counter += 1
-                band_counter += 1
-    
-    if not commands:
-        print(f"No latency configuration needed for {machine}")
-        return
-    
-    print(f"Configuring latencies with {filter_counter-1} rules on {machine}")
-    
-    # Execute batch tc commands using tc -b -
-    tc_commands = "\n".join(commands)
-    await run_script_in_docker(job_id, machine, "tc -b -", tc_commands)
+async def clean_command(job_id: int):
+    machines = await oar_job_list_machines(job_id)
 
+    print(f"Cleaning up {len(machines)} machines...")
+
+    # Clean up all machines in parallel
+    tasks = [machine_cleanup_interface(job_id, machine) for machine in machines]
+    await asyncio.gather(*tasks)
+
+    print("Cleanup completed for all machines")
+
+
+async def configurations_command(job_id: int, addresses: int, latency_matrix_path: str):
+    # Load latency matrix
+    latency_matrix = LatencyMatrix.read_from_file(latency_matrix_path)
+
+    # Get machines from job
+    machines = await oar_job_list_machines(job_id)
+
+    # Generate configurations
+    configurations = machine_generate_configurations(
+        machines, addresses, latency_matrix
+    )
+
+    # Print configurations with markers between each machine
+    for i, config in enumerate(configurations):
+        if i > 0:
+            print("\n" + "=" * 80 + "\n")
+
+        print(f"Machine: {config.machine}")
+        print("-" * 40)
+
+        print("NFT Script:")
+        print(config.nft_script)
+
+        print("\nTC Commands:")
+        for cmd in config.tc_commands:
+            print(f"tc {cmd}")
+
+        print("\nIP Commands:")
+        for cmd in config.ip_commands:
+            print(cmd)
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="OAR P2P network setup")
-    parser.add_argument("job_id", type=int, help="OAR job ID")
-    parser.add_argument("addresses", type=int, help="Number of addresses to allocate")
-    parser.add_argument("latency_matrix", type=str, help="Path to latency matrix file")
+    parser = argparse.ArgumentParser(description="OAR P2P network management")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Setup command
+    setup_parser = subparsers.add_parser(
+        "setup", help="Setup network interfaces and latencies"
+    )
+    setup_parser.add_argument("job_id", type=int, help="OAR job ID")
+    setup_parser.add_argument(
+        "addresses", type=int, help="Number of addresses to allocate"
+    )
+    setup_parser.add_argument(
+        "latency_matrix", type=str, help="Path to latency matrix file"
+    )
+
+    # Clean command
+    clean_parser = subparsers.add_parser("clean", help="Clean up network interfaces")
+    clean_parser.add_argument("job_id", type=int, help="OAR job ID")
+
+    # Configurations command
+    config_parser = subparsers.add_parser(
+        "configurations", help="Generate and print machine configurations"
+    )
+    config_parser.add_argument("job_id", type=int, help="OAR job ID")
+    config_parser.add_argument(
+        "addresses", type=int, help="Number of addresses to allocate"
+    )
+    config_parser.add_argument(
+        "latency_matrix", type=str, help="Path to latency matrix file"
+    )
 
     args = parser.parse_args()
 
-    # Load latency matrix
-    latency_matrix = LatencyMatrix.read_from_file(args.latency_matrix)
-    
-    machines = await oar_job_list_machines(args.job_id)
-    addresses_per_machine = (args.addresses + len(machines) - 1) // len(machines)
+    if args.command == "setup":
+        await setup_command(args.job_id, args.addresses, args.latency_matrix)
+    elif args.command == "clean":
+        await clean_command(args.job_id)
+    elif args.command == "configurations":
+        await configurations_command(args.job_id, args.addresses, args.latency_matrix)
+    else:
+        parser.print_help()
 
-    machine_indices = []
-    for machine_idx, machine in enumerate(machines):
-        indices = []
-        for addr_idx in range(addresses_per_machine):
-            index = machine_idx * addresses_per_machine + addr_idx
-            indices.append(index)
-        machine_indices.append(indices)
 
-    print(f"Machines: {machines}")
-    print(f"Addresses per machine: {addresses_per_machine}")
-    print(f"Machine indices: {machine_indices}")
-
-    # Prepare and configure interfaces for each machine in parallel
-    async def prepare_and_configure_machine(machine_idx: int, machine: str):
-        print(f"Preparing interface for {machine}...")
-        await machine_prepare_interface(args.job_id, machine)
-        
-        print(f"Configuring interface for {machine}...")
-        await machine_configure_interface(args.job_id, machine, machine_indices[machine_idx])
-        
-        print(f"Configuring latencies for {machine}...")
-        await machine_configure_latencies(args.job_id, machine, machine_indices[machine_idx], latency_matrix)
-    
-    # Run all machines in parallel
-    tasks = [
-        prepare_and_configure_machine(machine_idx, machine)
-        for machine_idx, machine in enumerate(machines)
-    ]
-    await asyncio.gather(*tasks)
+def address_from_index(index: int) -> str:
+    d = index % 254
+    c = (index // 254) % 254
+    assert c <= 254
+    return f"10.0.{c}.{d+1}"
 
 
 if __name__ == "__main__":

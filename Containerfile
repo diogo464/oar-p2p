@@ -22,7 +22,8 @@ FROM docker.io/alpine:3.22
 # Install runtime dependencies
 RUN apk add --no-cache \
     iproute2 \
-    iproute2-tc
+    iproute2-tc \
+    nftables
 
 # Copy the binary from builder stage
 COPY --from=builder /app/target/release/oar-p2p /usr/local/bin/oar-p2p
