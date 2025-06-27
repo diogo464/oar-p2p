@@ -30,10 +30,4 @@ COPY --from=builder /app/target/release/oar-p2p /usr/local/bin/oar-p2p
 # Set the binary as executable
 RUN chmod +x /usr/local/bin/oar-p2p
 
-# Run as non-root user
-RUN addgroup -g 1000 appgroup && \
-    adduser -D -s /bin/sh -u 1000 -G appgroup appuser
-
-USER appuser
-
 ENTRYPOINT ["/usr/local/bin/oar-p2p"]
