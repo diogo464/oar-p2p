@@ -422,11 +422,24 @@ async def clean_command(job_id: int):
 
     print(f"Cleaning up {len(machines)} machines...")
 
-    # Clean up all machines in parallel
+    # Clean up all machines in parallel, but don't fail fast
     tasks = [machine_cleanup_interface(job_id, machine) for machine in machines]
-    await asyncio.gather(*tasks)
-
-    print("Cleanup completed for all machines")
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Check for failures after all tasks complete
+    failures = []
+    for machine, result in zip(machines, results):
+        if isinstance(result, Exception):
+            failures.append((machine, result))
+            print(f"ERROR: Cleanup failed on {machine}: {result}")
+        else:
+            print(f"Cleanup completed successfully on {machine}")
+    
+    if failures:
+        failed_machines = [machine for machine, _ in failures]
+        raise Exception(f"Cleanup failed on {len(failures)} machines: {', '.join(failed_machines)}")
+    
+    print("Cleanup completed successfully on all machines")
 
 
 async def configurations_command(job_id: int, addresses: int, latency_matrix_path: str):
