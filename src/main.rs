@@ -3,7 +3,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use clap::Parser;
-use eyre::{Context, Result};
+use eyre::Result;
 use serde::Deserialize;
 use tokio::process::Command;
 
@@ -107,7 +107,9 @@ fn address_from_index(address: usize) -> String {
     format!("10.0.{}.{}", c, d + 1)
 }
 
-async fn clear_addresses(machine: &str) -> Result<()> {}
+async fn clear_addresses(_machine: &str) -> Result<()> {
+    Ok(())
+}
 
 async fn oar_network_addresses(job_id: u32) -> Result<Vec<String>> {
     #[derive(Deserialize)]
