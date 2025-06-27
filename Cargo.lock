@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "oar-p2p"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "clap",
  "color-eyre",
