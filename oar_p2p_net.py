@@ -2,6 +2,7 @@ import json
 import math
 import asyncio
 import argparse
+import logging
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -234,7 +235,7 @@ async def machine_apply_configuration(job_id: int, config: MachineConfiguration)
     """Apply a machine configuration by executing IP commands, TC commands, and NFT script."""
     machine = config.machine
 
-    print(f"Applying configuration to {machine}...")
+    logging.info(f"Applying configuration to {machine}...")
 
     # Prepare tasks for parallel execution
     tasks = []
@@ -242,18 +243,18 @@ async def machine_apply_configuration(job_id: int, config: MachineConfiguration)
     # IP commands task
     if config.ip_commands:
         ip_batch = "\n".join(config.ip_commands)
-        print(f"Executing {len(config.ip_commands)} IP commands on {machine}")
+        logging.info(f"Executing {len(config.ip_commands)} IP commands on {machine}")
         tasks.append(run_script_in_docker(job_id, machine, "ip -b -", ip_batch))
 
     # TC commands task
     if config.tc_commands:
         tc_batch = "\n".join(config.tc_commands)
-        print(f"Executing {len(config.tc_commands)} TC commands on {machine}")
+        logging.info(f"Executing {len(config.tc_commands)} TC commands on {machine}")
         tasks.append(run_script_in_docker(job_id, machine, "tc -b -", tc_batch))
 
     # NFT script task
     if config.nft_script:
-        print(f"Applying NFT script on {machine}")
+        logging.info(f"Applying NFT script on {machine}")
         tasks.append(
             run_script_in_docker(job_id, machine, "nft -f -", config.nft_script)
         )
@@ -263,7 +264,7 @@ async def machine_apply_configuration(job_id: int, config: MachineConfiguration)
         try:
             await asyncio.gather(*tasks)
         except Exception as e:
-            print(f"ERROR applying configuration to {machine}: {e}")
+            logging.error(f"ERROR applying configuration to {machine}: {e}")
             raise
 
 
@@ -361,7 +362,7 @@ async def machine_cleanup_interface(job_id: int, machine: str):
     stdout = await run_script_in_docker(job_id, machine, get_addr_script)
 
     if not stdout.strip():
-        print(f"No interface info for {machine}, skipping cleanup")
+        logging.info(f"No interface info for {machine}, skipping cleanup")
         return
 
     # Parse JSON output
@@ -382,9 +383,9 @@ async def machine_cleanup_interface(job_id: int, machine: str):
     commands.append(f"ip route del 10.0.0.0/8 dev {interface} 2>/dev/null || true")
 
     if len(commands) == 1:  # Only the route command
-        print(f"No 10.x addresses to remove from {machine}, only cleaning up route")
+        logging.info(f"No 10.x addresses to remove from {machine}, only cleaning up route")
     else:
-        print(f"Removing {len(commands)-1} addresses and route from {machine}")
+        logging.info(f"Removing {len(commands)-1} addresses and route from {machine}")
 
     # Execute batch commands and clean TC state and NFT table in parallel
     remove_script = "\n".join(commands)
@@ -413,8 +414,8 @@ async def setup_command(job_id: int, addresses: int, latency_matrix_path: str):
     # Get machines from job
     machines = await oar_job_list_machines(job_id)
 
-    print(f"Machines: {machines}")
-    print(f"Total addresses: {addresses}")
+    logging.info(f"Machines: {machines}")
+    logging.info(f"Total addresses: {addresses}")
 
     # Generate configurations for all machines
     configurations = machine_generate_configurations(
@@ -425,7 +426,7 @@ async def setup_command(job_id: int, addresses: int, latency_matrix_path: str):
     async def setup_machine(config: MachineConfiguration):
         if config.machine == "charmander-2":
             return
-        print(f"Setting up {config.machine}...")
+        logging.info(f"Setting up {config.machine}...")
 
         # First cleanup the interface
         await machine_cleanup_interface(job_id, config.machine)
@@ -436,12 +437,17 @@ async def setup_command(job_id: int, addresses: int, latency_matrix_path: str):
     # Run all machines in parallel
     tasks = [setup_machine(config) for config in configurations]
     await asyncio.gather(*tasks)
+    
+    # Print machine IP pairs to stdout
+    for config in configurations:
+        for ip in config.addresses:
+            print(f"{config.machine} {ip}")
 
 
 async def clean_command(job_id: int):
     machines = await oar_job_list_machines(job_id)
 
-    print(f"Cleaning up {len(machines)} machines...")
+    logging.info(f"Cleaning up {len(machines)} machines...")
 
     # Clean up all machines in parallel, but don't fail fast
     tasks = [machine_cleanup_interface(job_id, machine) for machine in machines]
@@ -452,9 +458,9 @@ async def clean_command(job_id: int):
     for machine, result in zip(machines, results):
         if isinstance(result, Exception):
             failures.append((machine, result))
-            print(f"ERROR: Cleanup failed on {machine}: {result}")
+            logging.error(f"ERROR: Cleanup failed on {machine}: {result}")
         else:
-            print(f"Cleanup completed successfully on {machine}")
+            logging.info(f"Cleanup completed successfully on {machine}")
 
     if failures:
         failed_machines = [machine for machine, _ in failures]
@@ -462,7 +468,7 @@ async def clean_command(job_id: int):
             f"Cleanup failed on {len(failures)} machines: {', '.join(failed_machines)}"
         )
 
-    print("Cleanup completed successfully on all machines")
+    logging.info("Cleanup completed successfully on all machines")
 
 
 async def configurations_command(job_id: int, addresses: int, latency_matrix_path: str):
@@ -502,6 +508,13 @@ async def configurations_command(job_id: int, addresses: int, latency_matrix_pat
 
 
 async def main():
+    # Configure logging to write to stderr
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+    
     parser = argparse.ArgumentParser(description="OAR P2P network management")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
