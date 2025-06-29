@@ -1,0 +1,35 @@
+FROM alpine:latest
+
+# Install all networking tools we need
+RUN apk update && \
+    apk add --no-cache \
+        iproute2 \
+        iproute2-tc \
+        nftables \
+        bpftool \
+        clang \
+        llvm \
+        linux-headers \
+        build-base \
+        git \
+        python3 \
+        py3-pip \
+        bash \
+        curl \
+        tcpdump \
+        iperf3 \
+        netcat-openbsd \
+        bind-tools \
+    && rm -rf /var/cache/apk/*
+
+# Set bash as default shell
+SHELL ["/bin/bash", "-c"]
+
+# Verify tools are working
+RUN tc --version && \
+    ip --version && \
+    bpftool version || echo "bpftool not available but continuing" && \
+    clang --version
+
+WORKDIR /work
+ENTRYPOINT ["/bin/bash"]
