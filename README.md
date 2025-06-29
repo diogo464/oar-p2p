@@ -1,4 +1,4 @@
-# OAR P2P Network Management
+# OAR P2P Net
 
 A Python tool for managing P2P network configurations in OAR cluster environments with configurable latency matrices.
 
@@ -11,7 +11,7 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Run the tool directly
-uv run oar_p2p.py --help
+uv run oar_p2p_net.py --help
 ```
 
 ## Usage
@@ -21,19 +21,19 @@ The tool provides three main commands:
 ### Setup Network (`up`)
 Configure network interfaces and apply latency settings:
 ```bash
-uv run oar_p2p.py up <job_id> <addresses> <latency_matrix_file>
+uv run oar_p2p_net.py up <job_id> <addresses> <latency_matrix_file>
 ```
 
 ### Cleanup Network (`down`)
 Remove network configurations:
 ```bash
-uv run oar_p2p.py down <job_id>
+uv run oar_p2p_net.py down <job_id>
 ```
 
 ### Generate Configurations (`configurations`)
 Preview the network configurations that would be applied:
 ```bash
-uv run oar_p2p.py configurations <job_id> <addresses> <latency_matrix_file>
+uv run oar_p2p_net.py configurations <job_id> <addresses> <latency_matrix_file>
 ```
 
 ## Requirements

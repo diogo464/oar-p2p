@@ -12,5 +12,5 @@ push: build
     docker push {{IMAGE_TAG}}
 
 python *args:
-    scp oar_p2p.py cluster:./
-    ssh cluster /home/diogo464/.local/bin/uv run python ./oar_p2p.py {{args}}
+    scp oar_p2p_net.py cluster:./
+    ssh cluster /home/diogo464/.local/bin/uv run python ./oar_p2p_net.py {{args}}

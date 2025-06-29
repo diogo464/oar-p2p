@@ -1,5 +1,5 @@
 [project]
-name = "oar-p2p"
+name = "oar-p2p-net"
 version = "0.1.0"
 description = "P2P network management tool for OAR cluster environments"
 readme = "README.md"
@@ -19,8 +19,8 @@ classifiers = [
 ]
 
 [project.scripts]
-oar-p2p = "oar_p2p:main"
+oar-p2p-net = "oar_p2p_net:main"
 
 [project.urls]
-Homepage = "https://github.com/diogo464/oar-p2p"
-Repository = "https://github.com/diogo464/oar-p2p"
+Homepage = "https://github.com/diogo464/oar-p2p-net"
+Repository = "https://github.com/diogo464/oar-p2p-net"
