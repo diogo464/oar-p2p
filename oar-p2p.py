@@ -8,65 +8,65 @@ from dataclasses import dataclass
 
 NFT_TABLE_NAME = "oar-p2p"
 
-MACHINE_INTERFACES = {
-    "alakazam-01": None,
-    "alakazam-02": None,
-    "alakazam-03": None,
-    "alakazam-04": None,
-    "alakazam-05": None,
-    "alakazam-06": None,
-    "alakazam-07": None,
-    "alakazam-08": None,
-    "bulbasaur-1": None,
-    "bulbasaur-2": None,
-    "bulbasaur-3": None,
-    "charmander-1": "bond0",
-    "charmander-2": "bond0",
-    "charmander-3": "bond0",
-    "charmander-4": "bond0",
-    "charmander-5": "bond0",
-    "gengar-1": None,
-    "gengar-2": None,
-    "gengar-3": None,
-    "gengar-4": None,
-    "gengar-5": None,
-    "kadabra-01": None,
-    "kadabra-02": None,
-    "kadabra-03": None,
-    "kadabra-04": None,
-    "kadabra-05": None,
-    "kadabra-06": None,
-    "kadabra-07": None,
-    "kadabra-08": None,
-    "lugia-1": None,
-    "lugia-2": None,
-    "lugia-3": None,
-    "lugia-4": None,
-    "lugia-5": None,
-    "magikarp-1": None,
-    "moltres-01": None,
-    "moltres-02": None,
-    "moltres-03": None,
-    "moltres-04": None,
-    "moltres-05": None,
-    "moltres-06": None,
-    "moltres-07": None,
-    "moltres-08": None,
-    "moltres-09": None,
-    "moltres-10": None,
-    "oddish-1": None,
-    "psyduck-1": None,
-    "psyduck-2": None,
-    "psyduck-3": None,
-    "shelder-1": None,
-    "squirtle-1": None,
-    "squirtle-2": None,
-    "squirtle-3": None,
-    "squirtle-4": None,
-    "staryu-1": None,
-    "sudowoodo-1": None,
-    "vulpix-1": None,
-}
+MACHINE_INTERFACES = [
+    ("alakazam-01", None),
+    ("alakazam-02", None),
+    ("alakazam-03", None),
+    ("alakazam-04", None),
+    ("alakazam-05", None),
+    ("alakazam-06", None),
+    ("alakazam-07", None),
+    ("alakazam-08", None),
+    ("bulbasaur-1", None),
+    ("bulbasaur-2", None),
+    ("bulbasaur-3", None),
+    ("charmander-1", "bond0"),
+    ("charmander-2", "bond0"),
+    ("charmander-3", "bond0"),
+    ("charmander-4", "bond0"),
+    ("charmander-5", "bond0"),
+    ("gengar-1", "bond0"),
+    ("gengar-2", "bond0"),
+    ("gengar-3", "bond0"),
+    ("gengar-4", "bond0"),
+    ("gengar-5", "bond0"),
+    ("kadabra-01", None),
+    ("kadabra-02", None),
+    ("kadabra-03", None),
+    ("kadabra-04", None),
+    ("kadabra-05", None),
+    ("kadabra-06", None),
+    ("kadabra-07", None),
+    ("kadabra-08", None),
+    ("lugia-1", None),
+    ("lugia-2", None),
+    ("lugia-3", None),
+    ("lugia-4", None),
+    ("lugia-5", None),
+    ("magikarp-1", None),
+    ("moltres-01", None),
+    ("moltres-02", None),
+    ("moltres-03", None),
+    ("moltres-04", None),
+    ("moltres-05", None),
+    ("moltres-06", None),
+    ("moltres-07", None),
+    ("moltres-08", None),
+    ("moltres-09", None),
+    ("moltres-10", None),
+    ("oddish-1", None),
+    ("psyduck-1", None),
+    ("psyduck-2", None),
+    ("psyduck-3", None),
+    ("shelder-1", None),
+    ("squirtle-1", None),
+    ("squirtle-2", None),
+    ("squirtle-3", None),
+    ("squirtle-4", None),
+    ("staryu-1", None),
+    ("sudowoodo-1", None),
+    ("vulpix-1", None),
+]
 
 
 class LatencyMatrix:
@@ -105,29 +105,43 @@ class LatencyMatrix:
 @dataclass
 class MachineConfiguration:
     machine: str
+    addresses: list[str]
     nft_script: str
     tc_commands: list[str]
     ip_commands: list[str]
 
 
 def machine_get_interface(machine: str) -> str:
-    interface = MACHINE_INTERFACES.get(machine, None)
-    assert interface is not None, f"machine interface not configured: {machine}"
-    return interface
+    for name, interface in MACHINE_INTERFACES:
+        if name == machine:
+            assert interface is not None, f"machine interface not configured: {machine}"
+            return interface
+    raise ValueError(f"Unknown machine: {machine}")
+
+
+def machine_get_index(machine: str) -> int:
+    for i, (name, _) in enumerate(MACHINE_INTERFACES):
+        if name == machine:
+            return i
+    raise ValueError(f"Unknown machine: {machine}")
 
 
 def machine_generate_configurations(
-    machines: list[str], num_addresses: int, matrix: LatencyMatrix
+    machines: list[str], num_addresses_per_machine: int, matrix: LatencyMatrix
 ) -> list[MachineConfiguration]:
     configurations = []
 
     machine_addr_idxs = defaultdict(list)
-
-    for i in range(num_addresses):
-        machine = machines[i % len(machines)]
-        machine_addr_idxs[machine].append(i)
+    addr_idx_to_machine_idx = defaultdict(int)
+    for machine_idx in range(len(machines)):
+        for local_addr_idx in range(num_addresses_per_machine):
+            addr_idx = machine_idx * num_addresses_per_machine + local_addr_idx
+            machine_addr_idxs[machines[machine_idx]].append(addr_idx)
+            addr_idx_to_machine_idx[addr_idx] = machine_get_index(machines[machine_idx])
 
     for machine in machines:
+        machine_ips = []
+        machine_index = machine_get_index(machine)
         interface = machine_get_interface(machine)
         addr_idxs = machine_addr_idxs[machine]
         ip_commands = []
@@ -135,14 +149,16 @@ def machine_generate_configurations(
 
         ip_commands.append(f"route add 10.0.0.0/8 dev {interface}")
         for addr_idx in addr_idxs:
-            ip_commands.append(
-                f"addr add {address_from_index(addr_idx)}/32 dev {interface}"
+            addr = address_from_index(
+                machine_index, addr_idx % num_addresses_per_machine
             )
+            machine_ips.append(addr)
+            ip_commands.append(f"addr add {addr}/32 dev {interface}")
 
         latencies_set = set()
         latencies_buckets = defaultdict(list)
         for addr_idx in addr_idxs:
-            for i in range(num_addresses):
+            for i in range(num_addresses_per_machine):
                 if addr_idx == i:
                     continue
                 latency = matrix.get_latency(addr_idx, i)
@@ -180,8 +196,14 @@ def machine_generate_configurations(
             nft_script += f"    elements = {{\n"
             for src_idx, dst_idx in latencies_buckets[latency]:
                 assert src_idx != dst_idx
-                src_addr = address_from_index(src_idx)
-                dst_addr = address_from_index(dst_idx)
+                src_addr = address_from_index(
+                    addr_idx_to_machine_idx[src_idx],
+                    src_idx % num_addresses_per_machine,
+                )
+                dst_addr = address_from_index(
+                    addr_idx_to_machine_idx[dst_idx],
+                    dst_idx % num_addresses_per_machine,
+                )
                 nft_script += f"      {src_addr} . {dst_addr},\n"
             nft_script += f"    }}\n"
             nft_script += f"  }}\n\n"
@@ -198,6 +220,7 @@ def machine_generate_configurations(
         configurations.append(
             MachineConfiguration(
                 machine=machine,
+                addresses=machine_ips,
                 nft_script=nft_script,
                 tc_commands=tc_commands,
                 ip_commands=ip_commands,
@@ -322,14 +345,12 @@ set -e
 
 
 def machine_interface(name: str) -> str:
-    if name not in MACHINE_INTERFACES:
-        raise ValueError(f"Unknown machine: {name}")
-
-    interface = MACHINE_INTERFACES[name]
-    if interface is None:
-        raise ValueError(f"No interface configured for machine: {name}")
-
-    return interface
+    for machine, interface in MACHINE_INTERFACES:
+        if machine == name:
+            if interface is None:
+                raise ValueError(f"No interface configured for machine: {name}")
+            return interface
+    raise ValueError(f"Unknown machine: {name}")
 
 
 async def machine_cleanup_interface(job_id: int, machine: str):
@@ -425,7 +446,7 @@ async def clean_command(job_id: int):
     # Clean up all machines in parallel, but don't fail fast
     tasks = [machine_cleanup_interface(job_id, machine) for machine in machines]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     # Check for failures after all tasks complete
     failures = []
     for machine, result in zip(machines, results):
@@ -434,11 +455,13 @@ async def clean_command(job_id: int):
             print(f"ERROR: Cleanup failed on {machine}: {result}")
         else:
             print(f"Cleanup completed successfully on {machine}")
-    
+
     if failures:
         failed_machines = [machine for machine, _ in failures]
-        raise Exception(f"Cleanup failed on {len(failures)} machines: {', '.join(failed_machines)}")
-    
+        raise Exception(
+            f"Cleanup failed on {len(failures)} machines: {', '.join(failed_machines)}"
+        )
+
     print("Cleanup completed successfully on all machines")
 
 
@@ -462,6 +485,10 @@ async def configurations_command(job_id: int, addresses: int, latency_matrix_pat
         print(f"Machine: {config.machine}")
         print("-" * 40)
 
+        print("\nAddresses:")
+        for addr in config.addresses:
+            print(addr)
+
         print("NFT Script:")
         print(config.nft_script)
 
@@ -480,7 +507,7 @@ async def main():
 
     # Setup command
     setup_parser = subparsers.add_parser(
-        "setup", help="Setup network interfaces and latencies"
+        "up", help="Setup network interfaces and latencies"
     )
     setup_parser.add_argument("job_id", type=int, help="OAR job ID")
     setup_parser.add_argument(
@@ -491,7 +518,7 @@ async def main():
     )
 
     # Clean command
-    clean_parser = subparsers.add_parser("clean", help="Clean up network interfaces")
+    clean_parser = subparsers.add_parser("down", help="Clean up network interfaces")
     clean_parser.add_argument("job_id", type=int, help="OAR job ID")
 
     # Configurations command
@@ -500,7 +527,7 @@ async def main():
     )
     config_parser.add_argument("job_id", type=int, help="OAR job ID")
     config_parser.add_argument(
-        "addresses", type=int, help="Number of addresses to allocate"
+        "addresses", type=int, help="Number of addresses to allocate per machine"
     )
     config_parser.add_argument(
         "latency_matrix", type=str, help="Path to latency matrix file"
@@ -508,9 +535,9 @@ async def main():
 
     args = parser.parse_args()
 
-    if args.command == "setup":
+    if args.command == "up":
         await setup_command(args.job_id, args.addresses, args.latency_matrix)
-    elif args.command == "clean":
+    elif args.command == "down":
         await clean_command(args.job_id)
     elif args.command == "configurations":
         await configurations_command(args.job_id, args.addresses, args.latency_matrix)
@@ -518,11 +545,11 @@ async def main():
         parser.print_help()
 
 
-def address_from_index(index: int) -> str:
-    d = index % 254
-    c = (index // 254) % 254
+def address_from_index(machine_index: int, addr_index: int) -> str:
+    d = addr_index % 254
+    c = (addr_index // 254) % 254
     assert c <= 254
-    return f"10.0.{c}.{d+1}"
+    return f"10.{machine_index}.{c}.{d+1}"
 
 
 if __name__ == "__main__":
