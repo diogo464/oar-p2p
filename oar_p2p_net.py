@@ -522,38 +522,38 @@ async def main():
     setup_parser = subparsers.add_parser(
         "up", help="Setup network interfaces and latencies"
     )
-    setup_parser.add_argument("job_id", type=int, help="OAR job ID")
+    setup_parser.add_argument("--job-id", type=int, required=True, help="OAR job ID")
     setup_parser.add_argument(
-        "addresses", type=int, help="Number of addresses to allocate"
+        "--num-addresses", type=int, required=True, help="Number of addresses to allocate"
     )
     setup_parser.add_argument(
-        "latency_matrix", type=str, help="Path to latency matrix file"
+        "--latency-matrix", type=str, required=True, help="Path to latency matrix file"
     )
 
     # Clean command
     clean_parser = subparsers.add_parser("down", help="Clean up network interfaces")
-    clean_parser.add_argument("job_id", type=int, help="OAR job ID")
+    clean_parser.add_argument("--job-id", type=int, required=True, help="OAR job ID")
 
     # Configurations command
     config_parser = subparsers.add_parser(
         "configurations", help="Generate and print machine configurations"
     )
-    config_parser.add_argument("job_id", type=int, help="OAR job ID")
+    config_parser.add_argument("--job-id", type=int, required=True, help="OAR job ID")
     config_parser.add_argument(
-        "addresses", type=int, help="Number of addresses to allocate per machine"
+        "--num-addresses", type=int, required=True, help="Number of addresses to allocate per machine"
     )
     config_parser.add_argument(
-        "latency_matrix", type=str, help="Path to latency matrix file"
+        "--latency-matrix", type=str, required=True, help="Path to latency matrix file"
     )
 
     args = parser.parse_args()
 
     if args.command == "up":
-        await setup_command(args.job_id, args.addresses, args.latency_matrix)
+        await setup_command(getattr(args, 'job_id'), getattr(args, 'num_addresses'), getattr(args, 'latency_matrix'))
     elif args.command == "down":
-        await clean_command(args.job_id)
+        await clean_command(getattr(args, 'job_id'))
     elif args.command == "configurations":
-        await configurations_command(args.job_id, args.addresses, args.latency_matrix)
+        await configurations_command(getattr(args, 'job_id'), getattr(args, 'num_addresses'), getattr(args, 'latency_matrix'))
     else:
         parser.print_help()
 

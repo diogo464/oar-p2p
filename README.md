@@ -21,19 +21,19 @@ The tool provides three main commands:
 ### Setup Network (`up`)
 Configure network interfaces and apply latency settings:
 ```bash
-uv run oar_p2p_net.py up <job_id> <addresses> <latency_matrix_file>
+uv run oar_p2p_net.py up --job-id <job_id> --num-addresses <addresses> --latency-matrix <latency_matrix_file>
 ```
 
 ### Cleanup Network (`down`)
 Remove network configurations:
 ```bash
-uv run oar_p2p_net.py down <job_id>
+uv run oar_p2p_net.py down --job-id <job_id>
 ```
 
 ### Generate Configurations (`configurations`)
 Preview the network configurations that would be applied:
 ```bash
-uv run oar_p2p_net.py configurations <job_id> <addresses> <latency_matrix_file>
+uv run oar_p2p_net.py configurations --job-id <job_id> --num-addresses <addresses> --latency-matrix <latency_matrix_file>
 ```
 
 ## Requirements
