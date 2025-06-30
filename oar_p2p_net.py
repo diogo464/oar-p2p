@@ -565,6 +565,11 @@ def address_from_index(machine_index: int, addr_index: int) -> str:
     return f"10.{machine_index}.{c}.{d+1}"
 
 
-if __name__ == "__main__":
+def main_sync() -> None:
+    """Synchronous entry point for the script."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    main_sync()
 

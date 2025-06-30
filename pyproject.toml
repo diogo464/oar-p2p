@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [project.scripts]
-oar-p2p-net = "oar_p2p_net:main"
+oar-p2p-net = "oar_p2p_net:main_sync"
 
 [project.urls]
 Homepage = "https://github.com/diogo464/oar-p2p-net"
