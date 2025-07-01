@@ -169,32 +169,32 @@ def machine_generate_configurations(
 
         latencies = list(sorted(latencies_set))
 
-        tc_commands.append(f"qdisc add dev {interface} root handle 1: htb default 9999")
-        tc_commands.append(
-            f"class add dev {interface} parent 1: classid 1:9999 htb rate 10gbit"
-        )
-        for idx, latency in enumerate(latencies):
-            # tc class for latency at idx X is X + 1
+        for iface in ["lo", interface]:
+            tc_commands.append(f"qdisc add dev {iface} root handle 1: htb default 9999")
             tc_commands.append(
-                f"class add dev {interface} parent 1: classid 1:{idx+1} htb rate 10gbit"
+                f"class add dev {iface} parent 1: classid 1:9999 htb rate 10gbit"
             )
-            tc_commands.append(
-                f"qdisc add dev {interface} parent 1:{idx+1} handle {idx+2}: netem delay {latency}ms"
-            )
-            # mark for latency at idx X is X + 1
-            tc_commands.append(
-                f"filter add dev {interface} parent 1:0 prio 1 handle {idx+1} fw flowid 1:{idx+1}"
-            )
+            for idx, latency in enumerate(latencies):
+                # tc class for latency at idx X is X + 1
+                tc_commands.append(
+                    f"class add dev {iface} parent 1: classid 1:{idx+1} htb rate 10gbit"
+                )
+                tc_commands.append(
+                    f"qdisc add dev {iface} parent 1:{idx+1} handle {idx+2}: netem delay {latency}ms"
+                )
+                # mark for latency at idx X is X + 1
+                tc_commands.append(
+                    f"filter add dev {iface} parent 1:0 prio 1 handle {idx+1} fw flowid 1:{idx+1}"
+                )
 
         nft_script = ""
         nft_script += "table ip oar-p2p {" + "\n"
+        nft_script += f"  map mark_pairs {{\n"
+        nft_script += f"    type ipv4_addr . ipv4_addr : mark\n"
+        nft_script += f"    elements = {{\n"
         for latency_idx, latency in enumerate(latencies):
             if len(latencies_buckets[latency]) == 0:
                 continue
-            nft_script += f"  set mark_{latency_idx}_pairs {{\n"
-            nft_script += f"    type ipv4_addr . ipv4_addr\n"
-            nft_script += f"    flags interval\n"
-            nft_script += f"    elements = {{\n"
             for src_idx, dst_idx in latencies_buckets[latency]:
                 assert src_idx != dst_idx
                 src_addr = address_from_index(
@@ -205,16 +205,16 @@ def machine_generate_configurations(
                     addr_idx_to_machine_idx[dst_idx],
                     dst_idx % num_addresses_per_machine,
                 )
-                nft_script += f"      {src_addr} . {dst_addr},\n"
-            nft_script += f"    }}\n"
-            nft_script += f"  }}\n\n"
+                nft_script += f"      {src_addr} . {dst_addr} : {latency_idx+1},\n"
+        nft_script += f"    }}\n"
+        nft_script += f"  }}\n\n"
 
         nft_script += "    chain postrouting {\n"
         nft_script += "        type filter hook postrouting priority mangle - 1\n"
         nft_script += "        policy accept\n"
-        nft_script += "\n"
-        for latency_idx in range(len(latencies)):
-            nft_script += f"        ip saddr . ip daddr @mark_{latency_idx}_pairs meta mark set {latency_idx+1}\n"
+        nft_script += (
+            "        meta mark set ip saddr . ip daddr map @mark_pairs counter\n"
+        )
         nft_script += "    }" + "\n"
         nft_script += "}" + "\n"
 
@@ -383,7 +383,9 @@ async def machine_cleanup_interface(job_id: int, machine: str):
     commands.append(f"ip route del 10.0.0.0/8 dev {interface} 2>/dev/null || true")
 
     if len(commands) == 1:  # Only the route command
-        logging.info(f"No 10.x addresses to remove from {machine}, only cleaning up route")
+        logging.info(
+            f"No 10.x addresses to remove from {machine}, only cleaning up route"
+        )
     else:
         logging.info(f"Removing {len(commands)-1} addresses and route from {machine}")
 
@@ -396,6 +398,12 @@ async def machine_cleanup_interface(job_id: int, machine: str):
         ),
         run_script_in_docker(
             job_id, machine, f"tc qdisc del dev {interface} ingress 2>/dev/null || true"
+        ),
+        run_script_in_docker(
+            job_id, machine, f"tc qdisc del dev lo root 2>/dev/null || true"
+        ),
+        run_script_in_docker(
+            job_id, machine, f"tc qdisc del dev lo ingress 2>/dev/null || true"
         ),
         run_script_in_docker(
             job_id, machine, f"nft delete table {NFT_TABLE_NAME} 2>/dev/null || true"
@@ -437,7 +445,7 @@ async def setup_command(job_id: int, addresses: int, latency_matrix_path: str):
     # Run all machines in parallel
     tasks = [setup_machine(config) for config in configurations]
     await asyncio.gather(*tasks)
-    
+
     # Print machine IP pairs to stdout
     for config in configurations:
         for ip in config.addresses:
@@ -511,10 +519,10 @@ async def main():
     # Configure logging to write to stderr
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler()]
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler()],
     )
-    
+
     parser = argparse.ArgumentParser(description="OAR P2P network management")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -524,7 +532,10 @@ async def main():
     )
     setup_parser.add_argument("--job-id", type=int, required=True, help="OAR job ID")
     setup_parser.add_argument(
-        "--num-addresses", type=int, required=True, help="Number of addresses to allocate"
+        "--num-addresses",
+        type=int,
+        required=True,
+        help="Number of addresses to allocate",
     )
     setup_parser.add_argument(
         "--latency-matrix", type=str, required=True, help="Path to latency matrix file"
@@ -540,7 +551,10 @@ async def main():
     )
     config_parser.add_argument("--job-id", type=int, required=True, help="OAR job ID")
     config_parser.add_argument(
-        "--num-addresses", type=int, required=True, help="Number of addresses to allocate per machine"
+        "--num-addresses",
+        type=int,
+        required=True,
+        help="Number of addresses to allocate per machine",
     )
     config_parser.add_argument(
         "--latency-matrix", type=str, required=True, help="Path to latency matrix file"
@@ -549,11 +563,19 @@ async def main():
     args = parser.parse_args()
 
     if args.command == "up":
-        await setup_command(getattr(args, 'job_id'), getattr(args, 'num_addresses'), getattr(args, 'latency_matrix'))
+        await setup_command(
+            getattr(args, "job_id"),
+            getattr(args, "num_addresses"),
+            getattr(args, "latency_matrix"),
+        )
     elif args.command == "down":
-        await clean_command(getattr(args, 'job_id'))
+        await clean_command(getattr(args, "job_id"))
     elif args.command == "configurations":
-        await configurations_command(getattr(args, 'job_id'), getattr(args, 'num_addresses'), getattr(args, 'latency_matrix'))
+        await configurations_command(
+            getattr(args, "job_id"),
+            getattr(args, "num_addresses"),
+            getattr(args, "latency_matrix"),
+        )
     else:
         parser.print_help()
 
