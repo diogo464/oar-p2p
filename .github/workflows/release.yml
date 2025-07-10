@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Release Binaries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux builds
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            platform: linux-x86_64
+          
+          # macOS builds
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            platform: macos-x86_64
+          
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos-aarch64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build binary
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          strip target/${{ matrix.target }}/release/oar-p2p
+
+      - name: Strip binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          strip target/${{ matrix.target }}/release/oar-p2p || true
+
+      - name: Create tarball
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../oar-p2p-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz oar-p2p
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: oar-p2p-${{ matrix.platform }}
+          path: oar-p2p-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Move artifacts to release directory
+        run: |
+          mkdir -p release
+          mv artifacts/*/*.tar.gz release/
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum *.tar.gz > checksums-sha256.txt
+          sha512sum *.tar.gz > checksums-sha512.txt
+
+      - name: Generate release notes
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION_NUMBER="${VERSION#v}"
+          
+          cat > release-notes.md << EOF
+          # Release ${{ github.ref_name }}
+          
+          ## Installation
+          
+          ### Linux x86_64
+          \`\`\`bash
+          curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/oar-p2p-${{ github.ref_name }}-linux-x86_64.tar.gz | tar -xz
+          sudo mv oar-p2p /usr/local/bin/
+          \`\`\`
+          
+          ### macOS Intel
+          \`\`\`bash
+          curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/oar-p2p-${{ github.ref_name }}-macos-x86_64.tar.gz | tar -xz
+          sudo mv oar-p2p /usr/local/bin/
+          \`\`\`
+          
+          ### macOS Apple Silicon
+          \`\`\`bash
+          curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/oar-p2p-${{ github.ref_name }}-macos-aarch64.tar.gz | tar -xz
+          sudo mv oar-p2p /usr/local/bin/
+          \`\`\`
+          
+          ## Checksums
+          
+          ### SHA256
+          \`\`\`
+          $(cat release/checksums-sha256.txt)
+          \`\`\`
+          
+          ### SHA512
+          \`\`\`
+          $(cat release/checksums-sha512.txt)
+          \`\`\`
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/*.tar.gz
+            release/checksums-*.txt
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
