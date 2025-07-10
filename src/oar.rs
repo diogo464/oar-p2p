@@ -33,7 +33,7 @@ pub async fn job_list_machines(ctx: &Context) -> Result<Vec<Machine>> {
             }
 
             let stdout = std::str::from_utf8(&output.stdout)?;
-            extract_machines_from_oar_stat_json(&stdout, job_id)
+            extract_machines_from_oar_stat_json(stdout, job_id)
         }
         ExecutionNode::Unknown => {
             let job_id = ctx.job_id()?;
@@ -53,7 +53,7 @@ pub async fn job_list_machines(ctx: &Context) -> Result<Vec<Machine>> {
             }
 
             let stdout = std::str::from_utf8(&output.stdout)?;
-            extract_machines_from_oar_stat_json(&stdout, job_id)
+            extract_machines_from_oar_stat_json(stdout, job_id)
         }
         ExecutionNode::Machine(_) => {
             let nodefile = std::env::var("OAR_NODEFILE").context("reading OAR_NODEFILE env var")?;
@@ -101,7 +101,7 @@ mod test {
     use super::*;
 
     const OAR_STAT_JSON_JOB_ID: u32 = 36627;
-    const OAR_STAT_JSON_OUTPUT: &'static str = r#"
+    const OAR_STAT_JSON_OUTPUT: &str = r#"
 {
    "36627" : {
       "types" : [],

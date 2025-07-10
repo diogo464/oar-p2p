@@ -31,8 +31,7 @@ impl Context {
 
     pub fn frontend_hostname(&self) -> Result<&str> {
         self.frontend_hostname
-            .as_ref()
-            .map(|s| s.as_str())
+            .as_deref()
             .ok_or_else(|| eyre::eyre!("missing frontend hostname"))
     }
 }

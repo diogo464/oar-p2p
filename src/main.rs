@@ -27,7 +27,7 @@ pub mod latency_matrix;
 pub mod machine;
 pub mod oar;
 
-const CONTAINER_IMAGE_NAME: &'static str = "local/oar-p2p-networking";
+const CONTAINER_IMAGE_NAME: &str = "local/oar-p2p-networking";
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -185,7 +185,7 @@ async fn cmd_net_show(args: NetShowArgs) -> Result<()> {
     }
     addresses.sort();
     for (machine, addr) in addresses {
-        println!("{} {}", machine, addr);
+        println!("{machine} {addr}");
     }
     Ok(())
 }
@@ -343,11 +343,11 @@ fn machine_containers_create_script(containers: &[ScheduledContainer]) -> String
         for (key, val) in container.variables.iter() {
             script.push_str("\t-e ");
             script.push_str(key);
-            script.push_str("=");
+            script.push('=');
             script.push_str(val);
             script.push_str(" \\\n");
         }
-        script.push_str("\t");
+        script.push('\t');
         script.push_str(&container.image);
         script.push_str(" &\n");
         script.push_str(&format!("pid_{idx}=$!\n\n"));
@@ -371,7 +371,7 @@ async fn machine_create_containers(
 ) -> Result<()> {
     tracing::info!("creating {} containers", containers.len());
     let script = machine_containers_create_script(containers);
-    machine_run_script(&ctx, machine, &script).await?;
+    machine_run_script(ctx, machine, &script).await?;
     tracing::info!("containers created");
     Ok(())
 }
@@ -380,7 +380,7 @@ async fn machine_create_containers(
 async fn machine_start_containers(ctx: &Context, machine: Machine) -> Result<()> {
     tracing::info!("starting all containers");
     machine_run_script(
-        &ctx,
+        ctx,
         machine,
         "docker container ls -aq | xargs docker container start",
     )
@@ -439,7 +439,7 @@ async fn machine_containers_save_logs(
 ) -> Result<()> {
     tracing::info!("saving logs from {} containers", containers.len());
     let script = machine_containers_save_logs_script(containers);
-    machine_run_script(&ctx, machine, &script).await?;
+    machine_run_script(ctx, machine, &script).await?;
     tracing::info!("logs saved");
     Ok(())
 }
@@ -704,7 +704,7 @@ async fn machine_clean(ctx: &Context, machine: Machine) -> Result<()> {
     script.push_str("tc qdisc del dev lo root 2>/dev/null || true\n");
     script.push_str("tc qdisc del dev lo ingress 2>/dev/null || true\n");
     script.push_str("nft delete table oar-p2p 2>/dev/null || true\n");
-    machine_net_container_run_script(&ctx, machine, &script).await?;
+    machine_net_container_run_script(ctx, machine, &script).await?;
     tracing::info!("network interfaces clean");
     Ok(())
 }
@@ -715,7 +715,7 @@ fn machine_configuration_script(config: &MachineConfig) -> String {
     script.push_str("cat << EOF | ip -b -\n");
     for command in config.ip_commands.iter() {
         script.push_str(command);
-        script.push_str("\n");
+        script.push('\n');
     }
     script.push_str("\nEOF\n");
 
@@ -723,7 +723,7 @@ fn machine_configuration_script(config: &MachineConfig) -> String {
     script.push_str("cat << EOF | tc -b -\n");
     for command in config.tc_commands.iter() {
         script.push_str(command);
-        script.push_str("\n");
+        script.push('\n');
     }
     script.push_str("\nEOF\n");
 
@@ -817,8 +817,7 @@ fn machine_generate_configs(
                 let latency_mark = idx + 1;
 
                 machine_tc_commands.push(format!(
-                    "class add dev {iface} parent 1: classid 1:{} htb rate 10gbit",
-                    latency_class_id
+                    "class add dev {iface} parent 1: classid 1:{latency_class_id} htb rate 10gbit"
                 ));
                 // why idx + 2 here? I dont remember anymore and forgot to comment
                 machine_tc_commands.push(format!(
@@ -828,8 +827,7 @@ fn machine_generate_configs(
                 ));
                 // TODO: is the order of these things correct?
                 machine_tc_commands.push(format!(
-                    "filter add dev {iface} parent 1:0 prio 1 handle {} fw flowid 1:{}",
-                    latency_mark, latency_class_id,
+                    "filter add dev {iface} parent 1:0 prio 1 handle {latency_mark} fw flowid 1:{latency_class_id}",
                 ));
             }
         }
@@ -852,7 +850,7 @@ fn machine_generate_configs(
         }
         machine_nft_script.push_str("\t\t}\n");
         machine_nft_script.push_str("\t}\n");
-        machine_nft_script.push_str("\n");
+        machine_nft_script.push('\n');
         machine_nft_script.push_str("\tchain postrouting {\n");
         machine_nft_script.push_str("\t\ttype filter hook postrouting priority mangle -1\n");
         machine_nft_script.push_str("\t\tpolicy accept\n");
