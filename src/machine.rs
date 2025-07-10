@@ -1,3 +1,6 @@
+use eyre::{Context as _, Result};
+use futures::{StreamExt as _, stream::FuturesUnordered};
+
 macro_rules! define_machines {
     ($(($name:ident, $idx:expr, $hostname:expr, $cpus:expr, $interface:expr)),*) => {
         #[derive(Debug)]
@@ -137,3 +140,24 @@ define_machines!(
     (Sudowoodo1, 55, "sudowoodo-1", 16, todo!()),
     (Vulpix1, 56, "vulpix-1", 112, todo!())
 );
+
+pub async fn for_each<F, FUT, RET>(machines: impl IntoIterator<Item = &Machine>, f: F) -> Result<()>
+where
+    F: Fn(Machine) -> FUT,
+    FUT: std::future::Future<Output = Result<RET>>,
+{
+    let mut futures = FuturesUnordered::new();
+
+    for &machine in machines {
+        let fut = f(machine);
+        let fut = async move { (machine, fut.await) };
+        futures.push(fut);
+    }
+
+    while let Some((machine, result)) = futures.next().await {
+        if let Err(err) = result {
+            return Err(err).with_context(|| format!("running task on machine {machine}"));
+        }
+    }
+    Ok(())
+}

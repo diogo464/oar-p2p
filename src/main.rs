@@ -9,7 +9,6 @@ use std::{
 use clap::{Args, Parser, Subcommand};
 use eyre::Context as _;
 use eyre::Result;
-use futures::{StreamExt as _, stream::FuturesUnordered};
 use machine::Machine;
 use serde::Deserialize;
 use tokio::{
@@ -18,10 +17,15 @@ use tokio::{
     task::JoinSet,
 };
 
-use crate::latency_matrix::LatencyMatrix;
+use crate::{
+    context::{Context, ExecutionNode},
+    latency_matrix::LatencyMatrix,
+};
 
+pub mod context;
 pub mod latency_matrix;
 pub mod machine;
+pub mod oar;
 
 const CONTAINER_IMAGE_NAME: &'static str = "local/oar-p2p-networking";
 
@@ -105,20 +109,6 @@ struct RunArgs {
     schedule: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ExecutionNode {
-    Frontend,
-    Machine(Machine),
-    Unknown,
-}
-
-#[derive(Debug, Clone)]
-struct Context {
-    node: ExecutionNode,
-    job_id: Option<u32>,
-    frontend_hostname: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct MachineConfig {
     machine: Machine,
@@ -152,12 +142,7 @@ async fn main() -> Result<()> {
 }
 
 async fn context_from_common(common: &Common) -> Result<Context> {
-    let node = get_execution_node().await?;
-    Ok(Context {
-        node,
-        job_id: common.job_id,
-        frontend_hostname: common.frontend_hostname.clone(),
-    })
+    Context::new(common.job_id, common.frontend_hostname.clone()).await
 }
 
 async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
@@ -167,7 +152,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
         .context("reading latecy matrix")?;
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
-    let machines = job_list_machines(&context).await?;
+    let machines = oar::job_list_machines(&context).await?;
     let configs = machine_generate_configs(&matrix, &machines, args.addr_per_cpu);
     machines_net_container_build(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
@@ -177,7 +162,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
 
 async fn cmd_net_down(args: NetDownArgs) -> Result<()> {
     let context = context_from_common(&args.common).await?;
-    let machines = job_list_machines(&context).await?;
+    let machines = oar::job_list_machines(&context).await?;
     machines_net_container_build(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
     Ok(())
@@ -185,7 +170,7 @@ async fn cmd_net_down(args: NetDownArgs) -> Result<()> {
 
 async fn cmd_net_show(args: NetShowArgs) -> Result<()> {
     let context = context_from_common(&args.common).await?;
-    let machines = job_list_machines(&context).await?;
+    let machines = oar::job_list_machines(&context).await?;
     let mut set = JoinSet::default();
     for machine in machines {
         let context = context.clone();
@@ -270,7 +255,7 @@ fn parse_schedule(schedule: &str) -> Result<Vec<ScheduledContainer>> {
 
 async fn cmd_run(args: RunArgs) -> Result<()> {
     let ctx = context_from_common(&args.common).await?;
-    let machines = job_list_machines(&ctx).await?;
+    let machines = oar::job_list_machines(&ctx).await?;
     let schedule = match args.schedule {
         Some(path) => tokio::fs::read_to_string(&path)
             .await
@@ -286,104 +271,57 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
     };
     let containers = parse_schedule(&schedule)?;
 
-    machines_foreach(&machines, |machine| machine_containers_clean(&ctx, machine)).await?;
-    machines_foreach(&machines, |machine| {
+    machine::for_each(&machines, |machine| machine_containers_clean(&ctx, machine)).await?;
+    machine::for_each(&machines, |machine| {
         let ctx = ctx.clone();
         let containers = containers
             .iter()
             .filter(|c| c.machine == machine)
             .cloned()
             .collect::<Vec<_>>();
-        let mut script = String::default();
-        for (idx, container) in containers.iter().enumerate() {
-            script.push_str("docker create \\\n");
-            script.push_str("\t--pull=always \\\n");
-            script.push_str("\t--network=host \\\n");
-            script.push_str("\t--restart=no \\\n");
-            script.push_str(&format!("\t--name {} \\\n", container.name));
-            for (key, val) in container.variables.iter() {
-                script.push_str("\t-e ");
-                script.push_str(key);
-                script.push_str("=");
-                script.push_str(val);
-                script.push_str(" \\\n");
-            }
-            script.push_str("\t");
-            script.push_str(&container.image);
-            script.push_str(" &\n");
-            script.push_str(&format!("pid_{idx}=$!\n\n"));
-        }
-
-        for (idx, container) in containers.iter().enumerate() {
-            let name = &container.name;
-            script.push_str(&format!(
-                "wait $pid_{idx} || {{ echo Failed to create container {name} ; exit 1 ; }}\n"
-            ));
-        }
-        tracing::debug!("container creation script:\n{script}");
-        async move { machine_run_script(&ctx, machine, &script).await }
+        async move { machine_create_containers(&ctx, machine, &containers).await }
     })
     .await?;
 
     tracing::info!("starting all containers on all machines");
-    machines_foreach(
+    machine::for_each(
         machines
             .iter()
             .filter(|&machine| containers.iter().any(|c| c.machine == *machine)),
-        |machine| {
-            machine_run_script(
-                &ctx,
-                machine,
-                "docker container ls -aq | xargs docker container start",
-            )
-        },
+        |machine| machine_start_containers(&ctx, machine),
     )
     .await?;
 
     tracing::info!("waiting for all containers to exit");
-    machines_foreach(&machines, |machine| {
+    machine::for_each(&machines, |machine| {
         let ctx = ctx.clone();
         let containers = containers
             .iter()
             .filter(|c| c.machine == machine)
             .cloned()
             .collect::<Vec<_>>();
-        let mut script = String::default();
-        for container in containers {
-            let name = &container.name;
-            script.push_str(&format!("if [ \"$(docker wait {name})\" -ne \"0\" ] ; then\n"));
-            script.push_str(&format!("\techo Container {name} failed\n"));
-            script.push_str(&format!("\tdocker logs {name} 2>1\n"));
-            script.push_str("\texit 1\n");
-            script.push_str("fi\n\n");
+        async move {
+            machine_containers_wait(&ctx, machine, &containers)
+                .await
+                .with_context(|| format!("waiting for containers on {machine}"))
         }
-        script.push_str("exit 0\n");
-        async move { machine_run_script(&ctx, machine, &script).await }
     })
     .await?;
 
     tracing::info!("saving logs to disk on all machines");
-    machines_foreach(&machines, |machine| {
+    machine::for_each(&machines, |machine| {
         let ctx = ctx.clone();
         let containers = containers
             .iter()
             .filter(|c| c.machine == machine)
             .cloned()
             .collect::<Vec<_>>();
-        let mut script = String::default();
-        script.push_str("set -e\n");
-        script.push_str("mkdir -p /tmp/oar-p2p-logs\n");
-        script.push_str("find /tmp/oar-p2p-logs -maxdepth 1 -type f -delete\n");
-        for container in containers {
-            let name = &container.name;
-            script.push_str(&format!("docker logs {name} 1> /tmp/oar-p2p-logs/{name}.stdout 2> /tmp/oar-p2p-logs/{name}.stderr\n"));
-        }
-        script.push_str("exit 0\n");
-        async move { machine_run_script(&ctx, machine, &script).await }
+        async move { machine_containers_save_logs(&ctx, machine, &containers).await }
     })
     .await?;
 
-    machines_foreach(
+    tracing::info!("copying logs from all machines");
+    machine::for_each(
         machines
             .iter()
             .filter(|&machine| containers.iter().any(|c| c.machine == *machine)),
@@ -394,7 +332,121 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
     Ok(())
 }
 
+fn machine_containers_create_script(containers: &[ScheduledContainer]) -> String {
+    let mut script = String::default();
+    for (idx, container) in containers.iter().enumerate() {
+        script.push_str("docker create \\\n");
+        script.push_str("\t--pull=always \\\n");
+        script.push_str("\t--network=host \\\n");
+        script.push_str("\t--restart=no \\\n");
+        script.push_str(&format!("\t--name {} \\\n", container.name));
+        for (key, val) in container.variables.iter() {
+            script.push_str("\t-e ");
+            script.push_str(key);
+            script.push_str("=");
+            script.push_str(val);
+            script.push_str(" \\\n");
+        }
+        script.push_str("\t");
+        script.push_str(&container.image);
+        script.push_str(" &\n");
+        script.push_str(&format!("pid_{idx}=$!\n\n"));
+    }
+
+    for (idx, container) in containers.iter().enumerate() {
+        let name = &container.name;
+        script.push_str(&format!(
+            "wait $pid_{idx} || {{ echo Failed to create container {name} ; exit 1 ; }}\n"
+        ));
+    }
+
+    script
+}
+
+#[tracing::instrument(ret, err, skip(ctx, containers))]
+async fn machine_create_containers(
+    ctx: &Context,
+    machine: Machine,
+    containers: &[ScheduledContainer],
+) -> Result<()> {
+    tracing::info!("creating {} containers", containers.len());
+    let script = machine_containers_create_script(containers);
+    machine_run_script(&ctx, machine, &script).await?;
+    tracing::info!("containers created");
+    Ok(())
+}
+
+#[tracing::instrument(ret, err, skip(ctx))]
+async fn machine_start_containers(ctx: &Context, machine: Machine) -> Result<()> {
+    tracing::info!("starting all containers");
+    machine_run_script(
+        &ctx,
+        machine,
+        "docker container ls -aq | xargs docker container start",
+    )
+    .await?;
+    tracing::info!("all containers started");
+    Ok(())
+}
+
+fn machine_containers_wait_script(containers: &[ScheduledContainer]) -> String {
+    let mut script = String::default();
+    for container in containers {
+        let name = &container.name;
+        script.push_str(&format!(
+            "if [ \"$(docker wait {name})\" -ne \"0\" ] ; then\n"
+        ));
+        script.push_str(&format!("\techo Container {name} failed\n"));
+        script.push_str(&format!("\tdocker logs {name} 2>1\n"));
+        script.push_str("\texit 1\n");
+        script.push_str("fi\n\n");
+    }
+    script.push_str("exit 0\n");
+    script
+}
+
+#[tracing::instrument(ret, err, skip(ctx, containers))]
+async fn machine_containers_wait(
+    ctx: &Context,
+    machine: Machine,
+    containers: &[ScheduledContainer],
+) -> Result<()> {
+    tracing::info!("waiting for {} containers to exit", containers.len());
+    let script = machine_containers_wait_script(containers);
+    machine_run_script(ctx, machine, &script).await?;
+    tracing::info!("all containers exited");
+    Ok(())
+}
+
+fn machine_containers_save_logs_script(containers: &[ScheduledContainer]) -> String {
+    let mut script = String::default();
+    script.push_str("set -e\n");
+    script.push_str("mkdir -p /tmp/oar-p2p-logs\n");
+    script.push_str("find /tmp/oar-p2p-logs -maxdepth 1 -type f -delete\n");
+    for container in containers {
+        let name = &container.name;
+        script.push_str(&format!("docker logs {name} 1> /tmp/oar-p2p-logs/{name}.stdout 2> /tmp/oar-p2p-logs/{name}.stderr\n"));
+    }
+    script.push_str("exit 0\n");
+    script
+}
+
+#[tracing::instrument(ret, err, skip(ctx, containers))]
+async fn machine_containers_save_logs(
+    ctx: &Context,
+    machine: Machine,
+    containers: &[ScheduledContainer],
+) -> Result<()> {
+    tracing::info!("saving logs from {} containers", containers.len());
+    let script = machine_containers_save_logs_script(containers);
+    machine_run_script(&ctx, machine, &script).await?;
+    tracing::info!("logs saved");
+    Ok(())
+}
+
+#[tracing::instrument(ret, err, skip(ctx))]
 async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Path) -> Result<()> {
+    tracing::info!("copying container logs from machine");
     let scp_common = &[
         "-o",
         "StrictHostKeyChecking=no",
@@ -406,7 +458,7 @@ async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Pat
     args.extend(scp_common);
     if ctx.node == ExecutionNode::Unknown {
         args.push("-J");
-        args.push(ctx.frontend_hostname.as_ref().expect("TODO"));
+        args.push(ctx.frontend_hostname()?);
     }
     args.push("-r");
 
@@ -417,38 +469,15 @@ async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Pat
 
     let output = Command::new("scp").args(args).output().await?;
     output.exit_ok()?;
+    tracing::info!("logs finished copying");
     Ok(())
 }
 
-async fn machines_foreach<F, FUT, RET>(
-    machines: impl IntoIterator<Item = &Machine>,
-    f: F,
-) -> Result<()>
-where
-    F: Fn(Machine) -> FUT,
-    FUT: std::future::Future<Output = Result<RET>>,
-{
-    let mut futures = FuturesUnordered::new();
-
-    for &machine in machines {
-        let fut = f(machine);
-        let fut = async move { (machine, fut.await) };
-        futures.push(fut);
-    }
-
-    while let Some((machine, result)) = futures.next().await {
-        if let Err(err) = result {
-            tracing::error!("error on machine {machine}: {err}");
-            return Err(err);
-        }
-    }
-    Ok(())
-}
-
-#[tracing::instrument(ret, err, skip_all, fields(machine = machine.to_string()))]
+#[tracing::instrument(ret, err, skip(ctx))]
 async fn machine_containers_clean(ctx: &Context, machine: Machine) -> Result<()> {
     tracing::info!("removing all containers...");
     machine_run_script(ctx, machine, "docker ps -aq | xargs -r docker rm -f").await?;
+    tracing::info!("all containers removed");
     Ok(())
 }
 
@@ -496,7 +525,9 @@ async fn machines_configure(ctx: &Context, configs: &[MachineConfig]) -> Result<
     Ok(())
 }
 
+#[tracing::instrument(err, skip(ctx))]
 async fn machine_list_addresses(ctx: &Context, machine: Machine) -> Result<Vec<Ipv4Addr>> {
+    tracing::info!("listing machine addresses");
     let interface = machine.interface();
     let script = format!("ip addr show {interface} | grep -oE '10\\.[0-9]+\\.[0-9]+\\.[0-9]+'");
     let output = machine_run_script(ctx, machine, &script).await?;
@@ -506,9 +537,11 @@ async fn machine_list_addresses(ctx: &Context, machine: Machine) -> Result<Vec<I
         tracing::trace!("parsing address from line: '{line}'");
         addresses.push(line.parse()?);
     }
+    tracing::trace!("addresses: {addresses:#?}");
     Ok(addresses)
 }
 
+#[tracing::instrument(ret, err, level = tracing::Level::TRACE)]
 async fn machine_run(
     ctx: &Context,
     machine: Machine,
@@ -542,7 +575,7 @@ async fn machine_run(
             }
         }
         ExecutionNode::Unknown => {
-            let frontend = ctx.frontend_hostname.as_ref().unwrap();
+            let frontend = ctx.frontend_hostname()?;
             let mut arguments = Vec::default();
             arguments.push("ssh");
             arguments.extend(ssh_common);
@@ -557,6 +590,7 @@ async fn machine_run(
     }
     arguments.extend(args);
 
+    tracing::trace!("running command: {arguments:?}");
     let mut proc = Command::new(arguments[0])
         .args(&arguments[1..])
         .stdout(std::process::Stdio::piped())
@@ -582,16 +616,17 @@ async fn machine_run(
 }
 
 async fn machine_run_script(ctx: &Context, machine: Machine, script: &str) -> Result<Output> {
-    tracing::trace!("running script on machine {machine}:\n{script}");
+    tracing::debug!("script body:\n{script}");
     let output = machine_run(ctx, machine, &[], Some(script)).await?;
-    tracing::trace!(
-        "stdout:\n{}",
-        std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf-8>")
-    );
-    tracing::trace!(
-        "stderr:\n{}",
-        std::str::from_utf8(&output.stderr).unwrap_or("<invalid utf-8>")
-    );
+    let stdout = std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf-8>");
+    let stderr = std::str::from_utf8(&output.stderr).unwrap_or("<invalid utf-8>");
+    if output.status.success() {
+        tracing::trace!("stdout:\n{stdout}",);
+        tracing::trace!("stderr:\n{stderr}",);
+    } else {
+        tracing::error!("stdout:\n{stdout}",);
+        tracing::error!("stderr:\n{stderr}",);
+    }
     Ok(output.exit_ok()?)
 }
 
@@ -600,7 +635,8 @@ async fn machine_net_container_run_script(
     machine: Machine,
     script: &str,
 ) -> Result<Output> {
-    machine_run(
+    tracing::debug!("network container script body:\n{script}");
+    let output = machine_run(
         ctx,
         machine,
         &[
@@ -614,11 +650,24 @@ async fn machine_net_container_run_script(
         ],
         Some(script),
     )
-    .await
+    .await?;
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf-8>");
+    let stderr = std::str::from_utf8(&output.stderr).unwrap_or("<invalid utf-8>");
+    if output.status.success() {
+        tracing::trace!("stdout:\n{stdout}",);
+        tracing::trace!("stderr:\n{stderr}",);
+    } else {
+        tracing::error!("stdout:\n{stdout}",);
+        tracing::error!("stderr:\n{stderr}",);
+    }
+
+    Ok(output.exit_ok()?)
 }
 
-#[tracing::instrument(ret, err, skip_all, fields(machine = machine.to_string()))]
+#[tracing::instrument(ret, err, skip(ctx))]
 async fn machine_net_container_build(ctx: &Context, machine: Machine) -> Result<()> {
+    tracing::info!("building network container...");
     let script = r#"
 set -e
 cat << EOF > /tmp/oar-p2p.containerfile
@@ -633,11 +682,13 @@ EOF
 docker build -t local/oar-p2p-networking:latest -f /tmp/oar-p2p.containerfile .
 "#;
     machine_run_script(ctx, machine, script).await?;
+    tracing::info!("network container built");
     Ok(())
 }
 
-#[tracing::instrument(ret, err, skip_all, fields(machine = machine.to_string()))]
+#[tracing::instrument(ret, err, skip(ctx))]
 async fn machine_clean(ctx: &Context, machine: Machine) -> Result<()> {
+    tracing::info!("cleaning network interfaces");
     let interface = machine.interface();
     let mut script = String::default();
     script.push_str(&format!(
@@ -653,7 +704,8 @@ async fn machine_clean(ctx: &Context, machine: Machine) -> Result<()> {
     script.push_str("tc qdisc del dev lo root 2>/dev/null || true\n");
     script.push_str("tc qdisc del dev lo ingress 2>/dev/null || true\n");
     script.push_str("nft delete table oar-p2p 2>/dev/null || true\n");
-    let output = machine_net_container_run_script(&ctx, machine, &script).await?;
+    machine_net_container_run_script(&ctx, machine, &script).await?;
+    tracing::info!("network interfaces clean");
     Ok(())
 }
 
@@ -682,11 +734,15 @@ fn machine_configuration_script(config: &MachineConfig) -> String {
     script
 }
 
-#[tracing::instrument(ret, err, skip_all, fields(machine = config.machine.to_string()))]
+#[tracing::instrument(ret, err, skip_all, fields(machine = ?config.machine))]
 async fn machine_configure(ctx: &Context, config: &MachineConfig) -> Result<()> {
+    tracing::info!(
+        "configuring machine with {} addresses",
+        config.addresses.len()
+    );
     let script = machine_configuration_script(config);
-    tracing::debug!("configuration script:\n{script}");
     machine_net_container_run_script(ctx, config.machine, &script).await?;
+    tracing::info!("machine configured");
     Ok(())
 }
 
@@ -814,193 +870,4 @@ fn machine_generate_configs(
         });
     }
     configs
-}
-
-async fn job_list_machines(ctx: &Context) -> Result<Vec<Machine>> {
-    match ctx.node {
-        ExecutionNode::Frontend => {
-            let job_id = match ctx.job_id {
-                Some(job_id) => job_id,
-                None => return Err(eyre::eyre!("job id is required when running from cluster")),
-            };
-
-            let output = Command::new("oarstat")
-                .arg("-j")
-                .arg(job_id.to_string())
-                .arg("-J")
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                tracing::error!(
-                    "stdout: {}",
-                    std::str::from_utf8(&output.stdout).unwrap_or("stderr contains invalid uft-8")
-                );
-                tracing::error!(
-                    "stderr: {}",
-                    std::str::from_utf8(&output.stderr).unwrap_or("stderr contains invalid uft-8")
-                );
-                return Err(eyre::eyre!("failed to run oarstat"));
-            }
-
-            let stdout = std::str::from_utf8(&output.stdout)?;
-            extract_machines_from_oar_stat_json(&stdout, job_id)
-        }
-        ExecutionNode::Unknown => {
-            let frontend_hostname = match ctx.frontend_hostname.as_ref() {
-                Some(hostname) => hostname,
-                None => {
-                    return Err(eyre::eyre!(
-                        "frontend hostname is required when running from outside the cluster"
-                    ));
-                }
-            };
-
-            let job_id = match ctx.job_id {
-                Some(job_id) => job_id,
-                None => return Err(eyre::eyre!("job id is required when running from cluster")),
-            };
-
-            let output = Command::new("ssh")
-                .arg(frontend_hostname)
-                .arg("oarstat")
-                .arg("-j")
-                .arg(job_id.to_string())
-                .arg("-J")
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                return Err(eyre::eyre!("failed to run oarstat"));
-            }
-
-            let stdout = std::str::from_utf8(&output.stdout)?;
-            extract_machines_from_oar_stat_json(&stdout, job_id)
-        }
-        ExecutionNode::Machine(_) => {
-            let nodefile = std::env::var("OAR_NODEFILE").context("reading OAR_NODEFILE env var")?;
-            let content = tokio::fs::read_to_string(&nodefile).await?;
-            let unique_lines = content
-                .lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.is_empty())
-                .collect::<HashSet<_>>();
-            let mut machines = Vec::default();
-            for hostname in unique_lines {
-                let machine = match Machine::from_hostname(hostname) {
-                    Some(machine) => machine,
-                    None => return Err(eyre::eyre!("unknown machine: {hostname}")),
-                };
-                machines.push(machine);
-            }
-            Ok(machines)
-        }
-    }
-}
-
-fn extract_machines_from_oar_stat_json(output: &str, job_id: u32) -> Result<Vec<Machine>> {
-    #[derive(Debug, Deserialize)]
-    struct JobSchema {
-        assigned_network_address: Vec<String>,
-    }
-    let map = serde_json::from_str::<HashMap<String, JobSchema>>(output)?;
-    let key = job_id.to_string();
-    let data = map
-        .get(&key)
-        .ok_or_else(|| eyre::eyre!("missing job key"))?;
-    let mut machines = Vec::default();
-    for hostname in data.assigned_network_address.iter() {
-        match Machine::from_hostname(hostname) {
-            Some(machine) => machines.push(machine),
-            None => return Err(eyre::eyre!("unknown machine: '{hostname}'")),
-        }
-    }
-    Ok(machines)
-}
-
-async fn get_execution_node() -> Result<ExecutionNode> {
-    let hostname = get_hostname().await?;
-    let node = match hostname.as_str() {
-        "frontend" => ExecutionNode::Frontend,
-        _ => match Machine::from_hostname(&hostname) {
-            Some(machine) => ExecutionNode::Machine(machine),
-            _ => ExecutionNode::Unknown,
-        },
-    };
-    Ok(node)
-}
-
-async fn get_hostname() -> Result<String> {
-    if let Ok(hostname) = tokio::fs::read_to_string("/etc/hostname").await {
-        Ok(hostname)
-    } else {
-        std::env::var("HOSTNAME").context("reading HOSTNAME env var")
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    const OAR_STAT_JSON_JOB_ID: u32 = 36627;
-    const OAR_STAT_JSON_OUTPUT: &'static str = r#"
-{
-   "36627" : {
-      "types" : [],
-      "reservation" : "None",
-      "dependencies" : [],
-      "Job_Id" : 36627,
-      "assigned_network_address" : [
-         "gengar-1",
-         "gengar-2"
-      ],
-      "owner" : "diogo464",
-      "properties" : "(( ( dedicated='NO' OR dedicated='protocol-labs' )) AND desktop_computing = 'NO') AND drain='NO'",
-      "startTime" : 1751979909,
-      "cpuset_name" : "diogo464_36627",
-      "stderr_file" : "OAR.36627.stderr",
-      "queue" : "default",
-      "state" : "Running",
-      "stdout_file" : "OAR.36627.stdout",
-      "array_index" : 1,
-      "array_id" : 36627,
-      "assigned_resources" : [
-         419,
-         420,
-         421,
-         422,
-         423,
-         424,
-         425,
-         426,
-         427,
-         428,
-         429,
-         430,
-         431,
-         432,
-         433,
-         434
-      ],
-      "name" : null,
-      "resubmit_job_id" : 0,
-      "message" : "R=16,W=12:0:0,J=B (Karma=0.087,quota_ok)",
-      "launchingDirectory" : "/home/diogo464",
-      "jobType" : "PASSIVE",
-      "submissionTime" : 1751979897,
-      "project" : "default",
-      "command" : "sleep 365d"
-   }
-}
-"#;
-
-    #[test]
-    fn test_extract_machines_from_oar_stat_json() {
-        let machines =
-            extract_machines_from_oar_stat_json(OAR_STAT_JSON_OUTPUT, OAR_STAT_JSON_JOB_ID)
-                .unwrap();
-        assert_eq!(machines.len(), 2);
-        assert_eq!(machines[0], Machine::Gengar1);
-        assert_eq!(machines[1], Machine::Gengar2);
-    }
 }
