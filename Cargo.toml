@@ -1,12 +1,13 @@
 [package]
-name = "oar-p2p-net"
-version = "0.1.0"
+name = "oar-p2p"
+version = "0.0.0"
 edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.40", features = ["derive", "env"] }
 color-eyre = "0.6.5"
 eyre = "0.6.12"
+futures = "0.3.31"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.12"
