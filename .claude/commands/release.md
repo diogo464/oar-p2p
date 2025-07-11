@@ -10,7 +10,8 @@ Steps:
 2. Update the version in Cargo.toml from its current value to {{version}} (without the 'v' prefix)
 3. Commit the version change with message: "chore: bump version to {{version}}"
 4. Create an annotated git tag with: git tag -a v{{version}} -m "Release v{{version}}"
-5. Push the commits and tag to GitHub: git push origin main --follow-tags
+5. Check available remotes with: git remote -v
+6. Push the commits and tag to all remotes (e.g., if you have both 'origin' and 'github', push to both)
 
 This will trigger the GitHub Actions workflow that automatically builds and releases the binaries.
 
