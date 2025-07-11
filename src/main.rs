@@ -155,7 +155,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
     let machines = oar::job_list_machines(&context).await?;
-    let configs = machine_generate_configs(&matrix, &machines, &args.addresses);
+    let configs = machine_generate_configs(&matrix, &machines, &args.addresses)?;
     machines_net_container_build(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
     machines_configure(&context, &configs).await?;
@@ -199,7 +199,7 @@ async fn cmd_net_preview(args: NetPreviewArgs) -> Result<()> {
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
     let machines = args.machine;
-    let configs = machine_generate_configs(&matrix, &machines, &args.addresses);
+    let configs = machine_generate_configs(&matrix, &machines, &args.addresses)?;
 
     for config in configs {
         (0..20).for_each(|_| print!("-"));
@@ -767,7 +767,7 @@ fn machine_generate_configs(
     matrix: &LatencyMatrix,
     machines: &[Machine],
     addr_policy: &AddressAllocationPolicy,
-) -> Vec<MachineConfig> {
+) -> Result<Vec<MachineConfig>> {
     let mut configs = Vec::default();
     let mut addresses = Vec::default();
     let mut address_to_index = HashMap::<Ipv4Addr, usize>::default();
@@ -811,6 +811,14 @@ fn machine_generate_configs(
             .entry(machine)
             .or_default()
             .push(address);
+    }
+
+    if addresses.len() > matrix.dimension() {
+        return Err(eyre::eyre!(
+            "latency matrix is too small, size is {} but {} was required",
+            matrix.dimension(),
+            addresses.len()
+        ));
     }
 
     for &machine in machines {
@@ -908,5 +916,5 @@ fn machine_generate_configs(
             ip_commands: machine_ip_commands,
         });
     }
-    configs
+    Ok(configs)
 }
