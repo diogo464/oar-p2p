@@ -471,7 +471,7 @@ async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Pat
     }
     args.push("-r");
 
-    let source_path = format!("{}:/tmp/oar-p2p-logs", machine.hostname());
+    let source_path = format!("{}:/tmp/oar-p2p-logs/*", machine.hostname());
     let destination_path = output_dir.display().to_string();
     args.push(&source_path);
     args.push(&destination_path);
