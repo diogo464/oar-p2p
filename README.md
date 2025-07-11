@@ -39,17 +39,110 @@ you can now use a tool like [direnv](https://direnv.net) or just `source` the fi
 to create a network you will need a latency matrix. you can generate a sample using [bonsai](https://codelab.fct.unl.pt/di/computer-systems/bonsai) or using the [web version](https://bonsai.d464.sh).
 Here is an example matrix:
 ```
+cat << EOF > latency.txt
 0.0 25.5687 78.64806 83.50032 99.91315
 25.5687 0.0 63.165894 66.74037 110.71518
 78.64806 63.165894 0.0 2.4708898 93.90618
 83.50032 66.74037 2.4708898 0.0 84.67561
 99.91315 110.71518 93.90618 84.67561 0.0
+EOF
 ```
 
-TODO: update this with addr
 once you have the latency matrix run:
 ```bash
-oar-p2p net up --addr-per-cpu 4 --latency-matrix latency.txt
+# this will create 4 address in total, across the job machines
+# it is also possible to specify a number of addresses per machine or per cpu
+# 4/cpu will create 4 addressses per cpu on every machine
+# 4/machine will create 4 addresses per machine on every machine
+oar-p2p net up --addresses 4 --latency-matrix latency.txt
 ```
 
+to view the created network and the nodes they are on run:
+```bash
+oar-p2p net show
+```
 
+which should output something like
+```
+gengar-1 10.16.0.1
+gengar-1 10.16.0.2
+gengar-2 10.17.0.1
+gengar-2 10.17.0.2
+```
+
+at this point the network is setup, you can check if the latencies are working properly by running a ping
+```
+~/d/d/oar-p2p (main)> ssh -J cluster gengar-1 ping -I 10.16.0.1 10.17.0.2 -c 3
+PING 10.17.0.2 (10.17.0.2) from 10.16.0.1 : 56(84) bytes of data.
+64 bytes from 10.17.0.2: icmp_seq=1 ttl=64 time=166 ms
+64 bytes from 10.17.0.2: icmp_seq=2 ttl=64 time=166 ms
+64 bytes from 10.17.0.2: icmp_seq=3 ttl=64 time=166 ms
+
+--- 10.17.0.2 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+rtt min/avg/max/mdev = 166.263/166.300/166.366/0.046 ms
+```
+which shows the expected latency that is about 2x88ms between address 0 and 3 in the matrix.
+
+### 3. removing the network
+this step is optional since the network up command already clears everything before setup, but if you want to remove all the addresses and nft/tc rules just run:
+```bash
+oar-p2p net down
+```
+
+### 4. running containerized experiments
+afer having setup the network, how you run the experiments is up to you, but `oar-p2p` has a helper subcommand to automate the process of starting containers, running them and collecting all the logs.
+
+the subcommand is `oar-p2p run` and it requires a "schedule" file to run. a schedule is a json array of objects, where each object describes a container to be executed. here is an example:
+```bash
+cat << EOF | oar-p2p run --output-dir logs
+[
+    { 
+        "address": "10.16.0.1", 
+        "image": "ghcr.io/diogo464/oar-p2p/demo:latest", 
+        "env": { "ADDRESS": "10.16.0.1", "REMOTE": "10.17.0.1", "MESSAGE": "I am container 1" }
+    },
+    { 
+        "address": "10.17.0.1", 
+        "image": "ghcr.io/diogo464/oar-p2p/demo:latest", 
+        "env": { "ADDRESS": "10.17.0.1", "REMOTE": "10.16.0.1", "MESSAGE": "I am container 2" }
+    }
+]
+EOF
+```
+
+when the command finishes running the logs should be under the `logs/` directory and contain something like:
+```
+───────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       │ File: logs/10.16.0.1.stderr   <EMPTY>
+───────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+───────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       │ File: logs/10.16.0.1.stdout
+───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1   │ I am container 1
+   2   │ PING 10.17.0.1 (10.17.0.1) from 10.16.0.1: 56 data bytes
+   3   │ 64 bytes from 10.17.0.1: seq=0 ttl=64 time=50.423 ms
+   4   │ 64 bytes from 10.17.0.1: seq=1 ttl=64 time=50.376 ms
+   5   │ 64 bytes from 10.17.0.1: seq=2 ttl=64 time=50.356 ms
+   6   │
+   7   │ --- 10.17.0.1 ping statistics ---
+   8   │ 3 packets transmitted, 3 packets received, 0% packet loss
+   9   │ round-trip min/avg/max = 50.356/50.385/50.423 ms
+───────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+───────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       │ File: logs/10.17.0.1.stderr   <EMPTY>
+───────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+───────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+       │ File: logs/10.17.0.1.stdout
+───────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1   │ I am container 2
+   2   │ PING 10.16.0.1 (10.16.0.1) from 10.17.0.1: 56 data bytes
+   3   │ 64 bytes from 10.16.0.1: seq=0 ttl=64 time=50.421 ms
+   4   │ 64 bytes from 10.16.0.1: seq=1 ttl=64 time=50.375 ms
+   5   │ 64 bytes from 10.16.0.1: seq=2 ttl=64 time=50.337 ms
+   6   │
+   7   │ --- 10.16.0.1 ping statistics ---
+   8   │ 3 packets transmitted, 3 packets received, 0% packet loss
+   9   │ round-trip min/avg/max = 50.337/50.377/50.421 ms
+───────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+```

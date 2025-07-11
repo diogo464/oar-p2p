@@ -1,7 +1,9 @@
 /target
+/logs
 __pycache__/
 .envrc
 latency-matrix-*.txt
+latency.txt
 schedule.json
 
 
