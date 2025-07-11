@@ -1,5 +1,7 @@
 /target
 /logs
+/benchmark-logs
+/addresses.txt
 __pycache__/
 .envrc
 latency-matrix-*.txt

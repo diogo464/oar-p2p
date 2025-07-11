@@ -4,6 +4,7 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::Output,
+    time::Duration,
 };
 
 use clap::{Args, Parser, Subcommand};
@@ -107,6 +108,9 @@ struct RunArgs {
 
     #[clap(long)]
     output_dir: PathBuf,
+
+    #[clap(long, default_value = "10")]
+    signal_delay: u64,
 
     schedule: Option<PathBuf>,
 }
@@ -307,6 +311,17 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
     )
     .await?;
 
+    tracing::info!("waiting {} seconds before signaling", args.signal_delay);
+    tokio::time::sleep(Duration::from_secs(args.signal_delay)).await;
+
+    machine::for_each(
+        machines
+            .iter()
+            .filter(|&machine| containers.iter().any(|c| c.machine == *machine)),
+        |machine| machine_signal_containers(&ctx, machine),
+    )
+    .await?;
+
     tracing::info!("waiting for all containers to exit");
     machine::for_each(&machines, |machine| {
         let ctx = ctx.clone();
@@ -350,10 +365,15 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
 fn machine_containers_create_script(containers: &[ScheduledContainer]) -> String {
     let mut script = String::default();
     for (idx, container) in containers.iter().enumerate() {
+        // remove the start signal file if it exists
+        script.push_str("mkdir -p /tmp/oar-p2p-signal\n");
+        script.push_str("rm /tmp/oar-p2p-signal/start 2>/dev/null || true\n");
+
         script.push_str("docker create \\\n");
         script.push_str("\t--pull=always \\\n");
         script.push_str("\t--network=host \\\n");
         script.push_str("\t--restart=no \\\n");
+        script.push_str("\t--volume /tmp/oar-p2p-signal:/oar-p2p\\\n");
         script.push_str(&format!("\t--name {} \\\n", container.name));
         for (key, val) in container.variables.iter() {
             script.push_str("\t-e ");
@@ -403,6 +423,14 @@ async fn machine_start_containers(ctx: &Context, machine: Machine) -> Result<()>
     )
     .await?;
     tracing::info!("all containers started");
+    Ok(())
+}
+
+#[tracing::instrument(ret, err, skip(ctx))]
+async fn machine_signal_containers(ctx: &Context, machine: Machine) -> Result<()> {
+    tracing::info!("signaling containers");
+    machine_run_script(ctx, machine, "touch /tmp/oar-p2p-signal/start").await?;
+    tracing::info!("containers signaled");
     Ok(())
 }
 

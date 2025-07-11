@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+
+import os
+import glob
+import sys
+from datetime import datetime
+import statistics
+
+def parse_timestamp(timestamp_str):
+    """Parse ISO timestamp from date -Iseconds"""
+    if 'T' in timestamp_str:
+        # Handle timezone formats
+        if timestamp_str.endswith('Z'):
+            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        elif '+' in timestamp_str or '-' in timestamp_str[-6:]:
+            return datetime.fromisoformat(timestamp_str)
+        else:
+            # Add timezone if missing
+            return datetime.fromisoformat(timestamp_str + '+00:00')
+    else:
+        # Try other formats
+        return datetime.fromisoformat(timestamp_str)
+
+def analyze_startup_times():
+    """Analyze startup times from log files"""
+    print("Analyzing startup times...")
+    
+    log_files = glob.glob("benchmark-logs/*.stdout")
+    if not log_files:
+        print("No log files found in benchmark-logs/")
+        return
+    
+    startup_times = []
+    start_signal_times = []
+    earliest_startup_time = None
+    earliest_start_signal_time = None
+    
+    for log_file in log_files:
+        try:
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+                
+                # Parse first line (startup time)
+                if len(lines) > 0:
+                    first_line = lines[0].strip()
+                    if first_line:
+                        try:
+                            timestamp = parse_timestamp(first_line)
+                            startup_times.append((log_file, timestamp))
+                            
+                            if earliest_startup_time is None or timestamp < earliest_startup_time:
+                                earliest_startup_time = timestamp
+                                
+                        except ValueError as e:
+                            print(f"Could not parse startup timestamp in {log_file}: '{first_line}' - {e}")
+                
+                # Look for second timestamp (start signal time)
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    if 'T' in line and i > 0:  # Skip first line, look for second timestamp
+                        try:
+                            timestamp = parse_timestamp(line)
+                            start_signal_times.append((log_file, timestamp))
+                            
+                            if earliest_start_signal_time is None or timestamp < earliest_start_signal_time:
+                                earliest_start_signal_time = timestamp
+                            break  # Only take the first additional timestamp found
+                            
+                        except ValueError:
+                            continue  # Skip lines that aren't timestamps
+                        
+        except Exception as e:
+            print(f"Error reading {log_file}: {e}")
+    
+    if not startup_times:
+        print("No valid startup times found")
+        return
+    
+    # Calculate relative startup times
+    relative_startup_times = []
+    for log_file, timestamp in startup_times:
+        relative_time = (timestamp - earliest_startup_time).total_seconds()
+        relative_startup_times.append(relative_time)
+    
+    # Print startup statistics
+    print(f"\n=== STARTUP TIME STATISTICS ===")
+    print(f"Total containers: {len(startup_times)}")
+    print(f"Earliest start time: {earliest_startup_time}")
+    print(f"Latest start time: {max(startup_times, key=lambda x: x[1])[1]}")
+    print(f"Total startup window: {max(relative_startup_times):.2f} seconds")
+    
+    if len(relative_startup_times) > 1:
+        print(f"Average relative startup time: {statistics.mean(relative_startup_times):.2f} seconds")
+        print(f"Median relative startup time: {statistics.median(relative_startup_times):.2f} seconds")
+        print(f"Standard deviation: {statistics.stdev(relative_startup_times):.2f} seconds")
+        print(f"Min relative startup time: {min(relative_startup_times):.2f} seconds")
+        print(f"Max relative startup time: {max(relative_startup_times):.2f} seconds")
+        
+        # Percentiles
+        sorted_times = sorted(relative_startup_times)
+        p50 = sorted_times[int(len(sorted_times) * 0.5)]
+        p90 = sorted_times[int(len(sorted_times) * 0.9)]
+        p95 = sorted_times[int(len(sorted_times) * 0.95)]
+        p99 = sorted_times[int(len(sorted_times) * 0.99)]
+        
+        print(f"50th percentile: {p50:.2f} seconds")
+        print(f"90th percentile: {p90:.2f} seconds")
+        print(f"95th percentile: {p95:.2f} seconds")
+        print(f"99th percentile: {p99:.2f} seconds")
+    
+    # Show startup distribution
+    print(f"\nStartup time distribution (by second):")
+    time_buckets = {}
+    for relative_time in relative_startup_times:
+        bucket = int(relative_time)
+        time_buckets[bucket] = time_buckets.get(bucket, 0) + 1
+    
+    for bucket in sorted(time_buckets.keys())[:10]:  # Show first 10 buckets
+        print(f"  {bucket}s: {time_buckets[bucket]} containers")
+    
+    # Print per-container details (first 10)
+    print(f"\nFirst 10 containers to start:")
+    sorted_startup_times = sorted(startup_times, key=lambda x: x[1])
+    for i, (log_file, timestamp) in enumerate(sorted_startup_times[:10]):
+        container_name = os.path.basename(log_file).replace('.stdout', '')
+        relative_time = (timestamp - earliest_startup_time).total_seconds()
+        print(f"{i+1:2d}. {container_name}: +{relative_time:.2f}s")
+    
+    if len(sorted_startup_times) > 10:
+        print(f"... and {len(sorted_startup_times) - 10} more containers")
+    
+    # Analyze start signal times if available
+    if start_signal_times:
+        print(f"\n=== START SIGNAL TIME STATISTICS ===")
+        print(f"Containers with start signal: {len(start_signal_times)}")
+        
+        # Calculate relative start signal times
+        relative_start_signal_times = []
+        for log_file, timestamp in start_signal_times:
+            relative_time = (timestamp - earliest_start_signal_time).total_seconds()
+            relative_start_signal_times.append(relative_time)
+        
+        print(f"Earliest start signal time: {earliest_start_signal_time}")
+        print(f"Latest start signal time: {max(start_signal_times, key=lambda x: x[1])[1]}")
+        print(f"Total start signal window: {max(relative_start_signal_times):.2f} seconds")
+        
+        if len(relative_start_signal_times) > 1:
+            print(f"Average relative start signal time: {statistics.mean(relative_start_signal_times):.2f} seconds")
+            print(f"Median relative start signal time: {statistics.median(relative_start_signal_times):.2f} seconds")
+            print(f"Standard deviation: {statistics.stdev(relative_start_signal_times):.2f} seconds")
+            
+            # Percentiles
+            sorted_signal_times = sorted(relative_start_signal_times)
+            p50 = sorted_signal_times[int(len(sorted_signal_times) * 0.5)]
+            p90 = sorted_signal_times[int(len(sorted_signal_times) * 0.9)]
+            p95 = sorted_signal_times[int(len(sorted_signal_times) * 0.95)]
+            p99 = sorted_signal_times[int(len(sorted_signal_times) * 0.99)]
+            
+            print(f"50th percentile: {p50:.2f} seconds")
+            print(f"90th percentile: {p90:.2f} seconds")
+            print(f"95th percentile: {p95:.2f} seconds")
+            print(f"99th percentile: {p99:.2f} seconds")
+        
+        # Show start signal distribution
+        print(f"\nStart signal time distribution (by second):")
+        signal_time_buckets = {}
+        for relative_time in relative_start_signal_times:
+            bucket = int(relative_time)
+            signal_time_buckets[bucket] = signal_time_buckets.get(bucket, 0) + 1
+        
+        for bucket in sorted(signal_time_buckets.keys())[:10]:  # Show first 10 buckets
+            print(f"  {bucket}s: {signal_time_buckets[bucket]} containers")
+        
+        # Calculate waiting times (time between startup and start signal)
+        waiting_times = []
+        for startup_entry in startup_times:
+            startup_log, startup_time = startup_entry
+            # Find corresponding start signal time
+            for signal_entry in start_signal_times:
+                signal_log, signal_time = signal_entry
+                if startup_log == signal_log:
+                    waiting_time = (signal_time - startup_time).total_seconds()
+                    waiting_times.append(waiting_time)
+                    break
+        
+        if waiting_times:
+            print(f"\n=== WAITING TIME STATISTICS ===")
+            print(f"Average waiting time: {statistics.mean(waiting_times):.2f} seconds")
+            print(f"Median waiting time: {statistics.median(waiting_times):.2f} seconds")
+            print(f"Min waiting time: {min(waiting_times):.2f} seconds")
+            print(f"Max waiting time: {max(waiting_times):.2f} seconds")
+            
+            if len(waiting_times) > 1:
+                print(f"Standard deviation: {statistics.stdev(waiting_times):.2f} seconds")
+    
+    else:
+        print(f"\nNo start signal timestamps found (containers may not have reached start signal yet)")
+
+def main():
+    """Main function"""
+    analyze_startup_times()
+
+if __name__ == "__main__":
+    main()
