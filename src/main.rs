@@ -235,6 +235,7 @@ fn parse_schedule(schedule: &str) -> Result<Vec<ScheduledContainer>> {
         env: HashMap<String, String>,
     }
 
+    tracing::trace!("parsing schedule:\n{schedule}");
     let items = serde_json::from_str::<Vec<ScheduleItem>>(schedule)?;
     let mut containers = Vec::default();
     for item in items {
@@ -257,12 +258,15 @@ fn parse_schedule(schedule: &str) -> Result<Vec<ScheduledContainer>> {
 
 async fn cmd_run(args: RunArgs) -> Result<()> {
     let ctx = context_from_common(&args.common).await?;
-    let machines = oar::job_list_machines(&ctx).await?;
     let schedule = match args.schedule {
-        Some(path) => tokio::fs::read_to_string(&path)
-            .await
-            .with_context(|| format!("reading schedule file: {}", path.display()))?,
+        Some(path) => {
+            tracing::debug!("reading schedule from {}", path.display());
+            tokio::fs::read_to_string(&path)
+                .await
+                .with_context(|| format!("reading schedule file: {}", path.display()))?
+        }
         None => {
+            tracing::debug!("reading schedule from stdin");
             let mut stdin = String::default();
             tokio::io::stdin()
                 .read_to_string(&mut stdin)
@@ -272,6 +276,7 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
         }
     };
     let containers = parse_schedule(&schedule)?;
+    let machines = oar::job_list_machines(&ctx).await?;
 
     machine::for_each(&machines, |machine| machine_containers_clean(&ctx, machine)).await?;
     machine::for_each(&machines, |machine| {
