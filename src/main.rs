@@ -485,6 +485,15 @@ async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Pat
     args.push(&destination_path);
 
     let output = Command::new("scp").args(args).output().await?;
+    let stdout = std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf-8>");
+    let stderr = std::str::from_utf8(&output.stderr).unwrap_or("<invalid utf-8>");
+    if output.status.success() {
+        tracing::trace!("scp stdout:\n{stdout}");
+        tracing::trace!("scp stderr:\n{stderr}");
+    } else {
+        tracing::error!("scp stdout:\n{stdout}");
+        tracing::error!("scp stderr:\n{stderr}");
+    }
     output.exit_ok()?;
     tracing::info!("logs finished copying");
     Ok(())
