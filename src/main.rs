@@ -351,7 +351,9 @@ fn machine_containers_create_script(containers: &[ScheduledContainer]) -> String
             script.push_str("\t-e ");
             script.push_str(key);
             script.push('=');
+            script.push('\'');
             script.push_str(val);
+            script.push('\'');
             script.push_str(" \\\n");
         }
         script.push('\t');
