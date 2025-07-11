@@ -18,10 +18,12 @@ use tokio::{
 };
 
 use crate::{
+    address_allocation_policy::AddressAllocationPolicy,
     context::{Context, ExecutionNode},
     latency_matrix::LatencyMatrix,
 };
 
+pub mod address_allocation_policy;
 pub mod context;
 pub mod latency_matrix;
 pub mod machine;
@@ -69,7 +71,7 @@ struct NetUpArgs {
     #[clap(flatten)]
     common: Common,
     #[clap(long)]
-    addr_per_cpu: u32,
+    addresses: AddressAllocationPolicy,
     #[clap(long)]
     latency_matrix: PathBuf,
 }
@@ -92,7 +94,7 @@ struct NetPreviewArgs {
     machine: Vec<Machine>,
 
     #[clap(long)]
-    addr_per_cpu: u32,
+    addresses: AddressAllocationPolicy,
 
     #[clap(long)]
     latency_matrix: PathBuf,
@@ -153,7 +155,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
     let machines = oar::job_list_machines(&context).await?;
-    let configs = machine_generate_configs(&matrix, &machines, args.addr_per_cpu);
+    let configs = machine_generate_configs(&matrix, &machines, &args.addresses);
     machines_net_container_build(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
     machines_configure(&context, &configs).await?;
@@ -197,7 +199,7 @@ async fn cmd_net_preview(args: NetPreviewArgs) -> Result<()> {
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
     let machines = args.machine;
-    let configs = machine_generate_configs(&matrix, &machines, args.addr_per_cpu);
+    let configs = machine_generate_configs(&matrix, &machines, &args.addresses);
 
     for config in configs {
         (0..20).for_each(|_| print!("-"));
@@ -757,38 +759,68 @@ fn machine_address_for_idx(machine: Machine, idx: u32) -> Ipv4Addr {
 fn machine_generate_configs(
     matrix: &LatencyMatrix,
     machines: &[Machine],
-    addr_per_cpu: u32,
+    addr_policy: &AddressAllocationPolicy,
 ) -> Vec<MachineConfig> {
     let mut configs = Vec::default();
     let mut addresses = Vec::default();
     let mut address_to_index = HashMap::<Ipv4Addr, usize>::default();
+    let mut addresses_per_machine = HashMap::<Machine, Vec<Ipv4Addr>>::default();
+    machines.iter().for_each(|&m| {
+        addresses_per_machine.insert(m, Default::default());
+    });
 
     // gather all addresses across all machines
-    for &machine in machines {
-        for i in 0..(addr_per_cpu * machine.cpus()) {
-            let address = machine_address_for_idx(machine, i);
-            addresses.push(address);
-            address_to_index.insert(address, addresses.len() - 1);
+    match addr_policy {
+        AddressAllocationPolicy::PerCpu(n) => {
+            for &machine in machines {
+                for i in 0..(n * machine.cpus()) {
+                    let address = machine_address_for_idx(machine, i);
+                    addresses.push(address);
+                }
+            }
         }
+        AddressAllocationPolicy::PerMachine(n) => {
+            for &machine in machines {
+                for i in 0..*n {
+                    let address = machine_address_for_idx(machine, i);
+                    addresses.push(address);
+                }
+            }
+        }
+        AddressAllocationPolicy::Total(n) => {
+            let mut counter = 0;
+            while counter < *n {
+                let machine = machines[(counter as usize) % machines.len()];
+                let address = machine_address_for_idx(machine, counter / (machines.len() as u32));
+                addresses.push(address);
+                counter += 1;
+            }
+        }
+    }
+    for (idx, &address) in addresses.iter().enumerate() {
+        let machine = machine_from_addr(address).expect("we should only generate valid addresses");
+        address_to_index.insert(address, idx);
+        addresses_per_machine
+            .entry(machine)
+            .or_default()
+            .push(address);
     }
 
     for &machine in machines {
-        let mut machine_addresses = Vec::default();
+        let machine_addresses = &addresses_per_machine[&machine];
         let mut machine_ip_commands = Vec::default();
         let mut machine_tc_commands = Vec::default();
         let mut machine_nft_script = String::default();
 
         machine_ip_commands.push(format!("route add 10.0.0.0/8 dev {}", machine.interface()));
-        for i in 0..(addr_per_cpu * machine.cpus()) {
-            let address = machine_address_for_idx(machine, i);
-            machine_addresses.push(address);
+        for address in machine_addresses.iter() {
             machine_ip_commands.push(format!("addr add {address}/32 dev {}", machine.interface()));
         }
 
         let mut latencies_set = HashSet::<u32>::default();
         let mut latencies_buckets = Vec::<u32>::default();
         let mut latencies_addr_pairs = HashMap::<u32, Vec<(Ipv4Addr, Ipv4Addr)>>::default();
-        for &addr in &machine_addresses {
+        for &addr in machine_addresses {
             let addr_idx = address_to_index[&addr];
             for other_idx in (0..addresses.len()).filter(|i| *i != addr_idx) {
                 let other = addresses[other_idx];
@@ -863,7 +895,7 @@ fn machine_generate_configs(
 
         configs.push(MachineConfig {
             machine,
-            addresses: machine_addresses,
+            addresses: machine_addresses.clone(),
             nft_script: machine_nft_script,
             tc_commands: machine_tc_commands,
             ip_commands: machine_ip_commands,
