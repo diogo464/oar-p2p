@@ -257,6 +257,14 @@ fn parse_schedule(schedule: &str) -> Result<Vec<ScheduledContainer>> {
 }
 
 async fn cmd_run(args: RunArgs) -> Result<()> {
+    tracing::debug!(
+        "creating output directory if it does not exist at {}",
+        args.output_dir.display()
+    );
+    tokio::fs::create_dir_all(&args.output_dir)
+        .await
+        .context("creating output directory")?;
+
     let ctx = context_from_common(&args.common).await?;
     let schedule = match args.schedule {
         Some(path) => {
