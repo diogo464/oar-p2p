@@ -679,7 +679,9 @@ RUN apk update && \
 WORKDIR /work
 EOF
 
-docker build -t local/oar-p2p-networking:latest -f /tmp/oar-p2p.containerfile .
+rm -rf /tmp/oar-p2p || true
+mkdir -p /tmp/oar-p2p
+docker build -t local/oar-p2p-networking:latest -f /tmp/oar-p2p.containerfile /tmp/oar-p2p
 "#;
     machine_run_script(ctx, machine, script).await?;
     tracing::info!("network container built");
