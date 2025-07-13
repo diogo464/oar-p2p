@@ -4,7 +4,7 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::Output,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use clap::{Args, Parser, Subcommand};
@@ -22,6 +22,7 @@ use crate::{
     address_allocation_policy::AddressAllocationPolicy,
     context::{Context, ExecutionNode},
     latency_matrix::LatencyMatrix,
+    signal::{Signal, SignalSpec},
 };
 
 pub mod address_allocation_policy;
@@ -29,6 +30,7 @@ pub mod context;
 pub mod latency_matrix;
 pub mod machine;
 pub mod oar;
+pub mod signal;
 
 const CONTAINER_IMAGE_NAME: &str = "local/oar-p2p-networking";
 
@@ -109,8 +111,8 @@ struct RunArgs {
     #[clap(long)]
     output_dir: PathBuf,
 
-    #[clap(long, default_value = "10")]
-    signal_delay: u64,
+    #[clap(long)]
+    signal: Vec<SignalSpec>,
 
     schedule: Option<PathBuf>,
 }
@@ -311,16 +313,27 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
     )
     .await?;
 
-    tracing::info!("waiting {} seconds before signaling", args.signal_delay);
-    tokio::time::sleep(Duration::from_secs(args.signal_delay)).await;
+    let signal_start_instant = Instant::now();
+    let signal_specs = {
+        let mut specs = args.signal.clone();
+        specs.sort_by_key(|s| s.delay);
+        specs
+    };
 
-    machine::for_each(
-        machines
-            .iter()
-            .filter(|&machine| containers.iter().any(|c| c.machine == *machine)),
-        |machine| machine_signal_containers(&ctx, machine),
-    )
-    .await?;
+    for spec in signal_specs {
+        tracing::info!("waiting to trigger signal {}", spec.signal);
+        let expire = signal_start_instant + spec.delay;
+        tokio::time::sleep_until(expire.into()).await;
+
+        tracing::info!("triggering signal {}", spec.signal);
+        machine::for_each(
+            machines
+                .iter()
+                .filter(|&machine| containers.iter().any(|c| c.machine == *machine)),
+            |machine| machine_signal_containers(&ctx, machine, &spec.signal),
+        )
+        .await?;
+    }
 
     tracing::info!("waiting for all containers to exit");
     machine::for_each(&machines, |machine| {
@@ -427,9 +440,9 @@ async fn machine_start_containers(ctx: &Context, machine: Machine) -> Result<()>
 }
 
 #[tracing::instrument(ret, err, skip(ctx))]
-async fn machine_signal_containers(ctx: &Context, machine: Machine) -> Result<()> {
+async fn machine_signal_containers(ctx: &Context, machine: Machine, signal: &Signal) -> Result<()> {
     tracing::info!("signaling containers");
-    machine_run_script(ctx, machine, "touch /tmp/oar-p2p-signal/start").await?;
+    machine_run_script(ctx, machine, &format!("touch /tmp/oar-p2p-signal/{signal}")).await?;
     tracing::info!("containers signaled");
     Ok(())
 }
