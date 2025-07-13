@@ -146,3 +146,27 @@ when the command finishes running the logs should be under the `logs/` directory
    9   │ round-trip min/avg/max = 50.337/50.377/50.421 ms
 ───────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ```
+
+#### signals
+the run subcommand tries to start all containers at the same time but even then, when running hundreds of containers, some of them will start tens of seconds apart from each other. to help synchronize container start up this subcommand also provides a way to signal containers.
+a signal is an empty file located under the `/oar-p2p/` directory that is visible to the container. you can add code inside your container to loop and wait until a certain file exists under this dirctory. for example, starting containers with the following command:
+```
+oar-p2p run --output-dir logs --signal start:10
+```
+will make the file `/oar-p2p/start` visibile to all containers 10 seconds after all containers are done starting. if the code inside the containers is made to wait for this file to appear then it is possible for all containers to start up within milliseconds of each other. here is some example java code you might use:
+```java
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public static void waitForStartFile() {
+    Path startFile = Path.of("/oar-p2p/start");
+    while (!Files.exists(startFile)) {
+        try {
+            Thread.sleep(250);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            break;
+        }
+    }
+}
+```
