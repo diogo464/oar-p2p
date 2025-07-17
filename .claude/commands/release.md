@@ -19,3 +19,4 @@ Important:
 - The version should be provided without the 'v' prefix (e.g., "1.0.0" not "v1.0.0")
 - Make sure all changes are committed before running this command
 - The GitHub Actions workflow will handle building binaries for all platforms and creating the release
+- Run `cargo build` after updating the version in `Cargo.toml` so the `Cargo.lock` gets updated
