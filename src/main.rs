@@ -42,9 +42,12 @@ struct Cli {
 
 #[derive(Debug, Args)]
 struct Common {
+    /// oar job id
     #[clap(long, env = "OAR_JOB_ID")]
     job_id: Option<u32>,
 
+    /// hostname used to access the frontend using ssh.
+    /// i.e. `ssh <frontend-hostname>` should work.
     #[clap(long, env = "FRONTEND_HOSTNAME")]
     frontend_hostname: Option<String>,
 }
@@ -73,8 +76,35 @@ enum NetSubCmd {
 struct NetUpArgs {
     #[clap(flatten)]
     common: Common,
+    /// specify how addresses will be created.
+    ///
+    /// the address allocation policy specifies how addresses will be created. there are 3
+    /// different ways to allocate addresses.
+    ///
+    /// 1. total number of addresses: in this policy, a fixed number of addresses will be allocated
+    ///    between all machines in the job. this is represented by a single number, for example,
+    ///    `64` will allocated a total of 64 addresses evenly across all machines in the job.
+    ///
+    /// 2. per cpu: in this policy, a set number of addresses will be allocated per cpu. machines
+    ///    with more cpus will have more addresses. this is represented by `<n>/cpu`, for example,
+    ///    `4/cpu` will allocated 4 addresses per cpu on every machine.
+    ///
+    /// 3. per machine: in this policy, a set number of addresses will be allocated per machine.
+    ///    each machine gets the same amount of addresses. this is represented by `<n>/machine`,
+    ///    for example, `64/machine` will allocate 64 addresses per machine on every machine.
     #[clap(long)]
     addresses: AddressAllocationPolicy,
+
+    /// path to the latency matrix.
+    ///
+    /// the latency matrix is a square matrix of latency values in milliseconds.
+    /// here is an example latency matrix:{n}
+    /// {n}
+    /// 0.0 25.5687 78.64806 83.50032 99.91315 {n}
+    /// 25.5687 0.0 63.165894 66.74037 110.71518 {n}
+    /// 78.64806 63.165894 0.0 2.4708898 93.90618 {n}
+    /// 83.50032 66.74037 2.4708898 0.0 84.67561 {n}
+    /// 99.91315 110.71518 93.90618 84.67561 0.0 {n}
     #[clap(long)]
     latency_matrix: PathBuf,
 }
@@ -108,12 +138,44 @@ struct RunArgs {
     #[clap(flatten)]
     common: Common,
 
+    /// directory where all the log files will be placed.
+    ///
+    /// this directory will be created if it does not exist.
+    /// for each container, there will be a seperate file for the stdout and sterr.
     #[clap(long)]
     output_dir: PathBuf,
 
+    /// declare a signal. this flag can be used more than once to declare multiple signals.
+    ///
+    /// a signal is an empty file that will be come visible to all containers after some amount of
+    /// time under the `/oar-p2p/` directory. a sginal has the format `<signal name>:<delay>`,
+    /// where the delay is given in seconds. using the signal `start:10` as an example, this means
+    /// that after all containers are started, a 10 second timer will start and when that timer
+    /// expires the file `/oar-p2p/start` will become visible to all containers at roughtly the
+    /// same time allowing them to synchronize their start-ups to within milliseconds. to make use
+    /// of this, your program running in the container must somehow wait for this file to come into
+    /// existance and this can be as simple as having a while loop checking for the file's existing
+    /// with a short sleep, here is an example in java:{n}
+    ///```java{n}
+    ///01.  import java.nio.file.Files;{n}
+    ///02.  import java.nio.file.Path;{n}
+    ///03. {n}
+    ///04.  public static void waitForStartFile() {{n}
+    ///05.      Path startFile = Path.of("/oar-p2p/start");{n}
+    ///06.      while (!Files.exists(startFile)) {{n}
+    ///07.          try {{n}
+    ///08.              Thread.sleep(250);{n}
+    ///09.          } catch (InterruptedException e) {{n}
+    ///10.              Thread.currentThread().interrupt();{n}
+    ///11.              break;{n}
+    ///12.          }{n}
+    ///13.      }{n}
+    ///14.  }{n}
+    ///```{n}
     #[clap(long)]
     signal: Vec<SignalSpec>,
 
+    /// the schedule used for execution. if not specified, it will be read from stdin.
     schedule: Option<PathBuf>,
 }
 
