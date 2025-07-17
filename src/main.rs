@@ -658,7 +658,7 @@ async fn machines_configure(ctx: &Context, configs: &[MachineConfig]) -> Result<
 async fn machine_list_addresses(ctx: &Context, machine: Machine) -> Result<Vec<Ipv4Addr>> {
     tracing::info!("listing machine addresses");
     let interface = machine.interface();
-    let script = format!("ip addr show {interface} | grep -oE '10\\.[0-9]+\\.[0-9]+\\.[0-9]+'");
+    let script = format!("ip addr show {interface} | grep -oE '10\\.[0-9]+\\.[0-9]+\\.[0-9]+' || true");
     let output = machine_run_script(ctx, machine, &script).await?;
     let stdout = std::str::from_utf8(&output.stdout)?;
     let mut addresses = Vec::default();
