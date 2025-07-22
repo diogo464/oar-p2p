@@ -46,6 +46,13 @@ struct Common {
     #[clap(long, env = "OAR_JOB_ID")]
     job_id: Option<u32>,
 
+    /// infer the oar job id
+    ///
+    /// if you have a single job running on the cluster, that job will be used, otherwise,
+    /// inference fails. the job_id flag takes precedence of over inference.
+    #[clap(long, env = "OAR_P2P_INFER_JOB_ID")]
+    infer_job_id: bool,
+
     /// hostname used to access the frontend using ssh.
     /// i.e. `ssh <frontend-hostname>` should work.
     #[clap(long, env = "FRONTEND_HOSTNAME")]
@@ -212,7 +219,12 @@ async fn main() -> Result<()> {
 }
 
 async fn context_from_common(common: &Common) -> Result<Context> {
-    Context::new(common.job_id, common.frontend_hostname.clone()).await
+    Context::new(
+        common.job_id,
+        common.infer_job_id,
+        common.frontend_hostname.clone(),
+    )
+    .await
 }
 
 async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
@@ -658,7 +670,8 @@ async fn machines_configure(ctx: &Context, configs: &[MachineConfig]) -> Result<
 async fn machine_list_addresses(ctx: &Context, machine: Machine) -> Result<Vec<Ipv4Addr>> {
     tracing::info!("listing machine addresses");
     let interface = machine.interface();
-    let script = format!("ip addr show {interface} | grep -oE '10\\.[0-9]+\\.[0-9]+\\.[0-9]+' || true");
+    let script =
+        format!("ip addr show {interface} | grep -oE '10\\.[0-9]+\\.[0-9]+\\.[0-9]+' || true");
     let output = machine_run_script(ctx, machine, &script).await?;
     let stdout = std::str::from_utf8(&output.stdout)?;
     let mut addresses = Vec::default();

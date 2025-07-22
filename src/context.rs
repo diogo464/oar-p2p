@@ -13,20 +13,43 @@ pub enum ExecutionNode {
 pub struct Context {
     pub node: ExecutionNode,
     job_id: Option<u32>,
+    infer_job_id: bool,
     frontend_hostname: Option<String>,
 }
 
 impl Context {
-    pub async fn new(job_id: Option<u32>, frontend_hostname: Option<String>) -> Result<Self> {
+    pub async fn new(
+        job_id: Option<u32>,
+        infer_job_id: bool,
+        frontend_hostname: Option<String>,
+    ) -> Result<Self> {
         Ok(Self {
             node: get_execution_node().await?,
             job_id,
+            infer_job_id,
             frontend_hostname,
         })
     }
 
-    pub fn job_id(&self) -> Result<u32> {
-        self.job_id.ok_or_else(|| eyre::eyre!("missing job id"))
+    pub async fn job_id(&self) -> Result<u32> {
+        tracing::debug!("obtaining job id");
+        if let Some(job_id) = self.job_id {
+            tracing::debug!("job id was set, using {job_id}");
+            Ok(job_id)
+        } else if self.infer_job_id {
+            tracing::debug!("job id was not set but inference is enabled, finding job id");
+            let job_ids = crate::oar::list_user_job_ids(self).await?;
+            match job_ids.len() {
+                0 => Err(eyre::eyre!("cannot infer job id, no jobs are running")),
+                1 => Ok(job_ids[0]),
+                _ => Err(eyre::eyre!(
+                    "cannot infer job id, multiple jobs are running"
+                )),
+            }
+        } else {
+            tracing::debug!("inference was disabled and job id is not set");
+            Err(eyre::eyre!("missing job id"))
+        }
     }
 
     pub fn frontend_hostname(&self) -> Result<&str> {

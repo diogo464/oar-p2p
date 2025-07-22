@@ -32,6 +32,12 @@ before setting up a network you need to create a job on the cluster and setup so
 ```bash
 export OAR_JOB_ID="<your job id>"
 export FRONTEND_HOSTNAME="<cluster's hostname, ex: dicluster>"
+
+# optionally, you can set this variable to infer the job id
+# if you only have one active job in the cluster, this flag will
+# tell oar-p2p to auto detect that job and use it so you dont have to
+# specify the job id.
+# export OAR_P2P_INFER_JOB_ID=true
 ```
 you can now use a tool like [direnv](https://direnv.net) or just `source` the file with those variables.
 
