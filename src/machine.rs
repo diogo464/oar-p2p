@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use eyre::{Context as _, Result};
 use futures::{StreamExt as _, stream::FuturesUnordered};
+use tokio::sync::Semaphore;
 
 macro_rules! define_machines {
     ($(($name:ident, $idx:expr, $hostname:expr, $cpus:expr, $interface:expr)),*) => {
@@ -141,23 +144,64 @@ define_machines!(
     (Vulpix1, 56, "vulpix-1", 112, todo!())
 );
 
-pub async fn for_each<F, FUT, RET>(machines: impl IntoIterator<Item = &Machine>, f: F) -> Result<()>
+pub async fn for_each<F, FUT, RET>(
+    machines: impl IntoIterator<Item = &Machine>,
+    f: F,
+) -> Result<Vec<(Machine, RET)>>
 where
     F: Fn(Machine) -> FUT,
+    RET: Send + 'static,
     FUT: std::future::Future<Output = Result<RET>>,
 {
+    let limit = match std::env::var("OAR_P2P_CONCURRENCY_LIMIT") {
+        Ok(value) => {
+            tracing::trace!("parsing concurrency limit value '{value}'");
+            let limit = value
+                .parse()
+                .expect("invalid value for OAR_P2P_CONCURRENCY_LIMIT");
+            tracing::debug!("using concurrency limit = {limit}");
+            limit
+        }
+        Err(_) => 0,
+    };
+    for_each_with_limit(machines, limit, f).await
+}
+
+pub async fn for_each_with_limit<F, FUT, RET>(
+    machines: impl IntoIterator<Item = &Machine>,
+    limit: usize,
+    f: F,
+) -> Result<Vec<(Machine, RET)>>
+where
+    F: Fn(Machine) -> FUT,
+    RET: Send + 'static,
+    FUT: std::future::Future<Output = Result<RET>>,
+{
+    let sem = Arc::new(Semaphore::new(if limit == 0 {
+        Semaphore::MAX_PERMITS
+    } else {
+        limit
+    }));
     let mut futures = FuturesUnordered::new();
 
     for &machine in machines {
         let fut = f(machine);
-        let fut = async move { (machine, fut.await) };
+        let sem = sem.clone();
+        let fut = async move {
+            let _permit = sem.acquire().await.unwrap();
+            (machine, fut.await)
+        };
         futures.push(fut);
     }
 
+    let mut results = Vec::default();
     while let Some((machine, result)) = futures.next().await {
-        if let Err(err) = result {
-            return Err(err).with_context(|| format!("running task on machine {machine}"));
+        match result {
+            Ok(value) => results.push((machine, value)),
+            Err(err) => {
+                return Err(err).with_context(|| format!("running task on machine {machine}"));
+            }
         }
     }
-    Ok(())
+    Ok(results)
 }

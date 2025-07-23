@@ -15,7 +15,6 @@ use serde::Deserialize;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     process::Command,
-    task::JoinSet,
 };
 
 use crate::{
@@ -253,14 +252,14 @@ async fn cmd_net_down(args: NetDownArgs) -> Result<()> {
 async fn cmd_net_show(args: NetShowArgs) -> Result<()> {
     let context = context_from_common(&args.common).await?;
     let machines = oar::job_list_machines(&context).await?;
-    let mut set = JoinSet::default();
-    for machine in machines {
+    let results = machine::for_each(machines.iter(), |machine| {
         let context = context.clone();
-        set.spawn(async move { (machine, machine_list_addresses(&context, machine).await) });
-    }
+        async move { machine_list_addresses(&context, machine).await }
+    })
+    .await?;
+
     let mut addresses = Vec::default();
-    for (machine, result) in set.join_all().await {
-        let addrs = result?;
+    for (machine, addrs) in results {
         for addr in addrs {
             addresses.push((machine, addr));
         }
@@ -625,44 +624,35 @@ async fn machine_containers_clean(ctx: &Context, machine: Machine) -> Result<()>
 #[tracing::instrument(ret, err, skip_all)]
 async fn machines_clean(ctx: &Context, machines: &[Machine]) -> Result<()> {
     tracing::info!("cleaning machines: {machines:?}");
-    let mut set = JoinSet::default();
-    for &machine in machines {
+    machine::for_each(machines, |machine| {
         let ctx = ctx.clone();
-        set.spawn(async move { machine_clean(&ctx, machine).await });
-    }
-    let results = set.join_all().await;
-    for result in results {
-        result?;
-    }
+        async move { machine_clean(&ctx, machine).await }
+    })
+    .await?;
     Ok(())
 }
 
 #[tracing::instrument(ret, err, skip_all)]
 async fn machines_net_container_build(ctx: &Context, machines: &[Machine]) -> Result<()> {
     tracing::info!("building networking container for machines: {machines:?}");
-    let mut set = JoinSet::default();
-    for &machine in machines {
+    machine::for_each(machines, |machine| {
         let ctx = ctx.clone();
-        set.spawn(async move { machine_net_container_build(&ctx, machine).await });
-    }
-    for result in set.join_all().await {
-        result?;
-    }
+        async move { machine_net_container_build(&ctx, machine).await }
+    })
+    .await?;
     Ok(())
 }
 
 #[tracing::instrument(ret, err, skip_all)]
 async fn machines_configure(ctx: &Context, configs: &[MachineConfig]) -> Result<()> {
     tracing::info!("configuring machines");
-    let mut set = JoinSet::default();
-    for config in configs {
+    let machines = configs.iter().map(|c| &c.machine);
+    machine::for_each(machines, |machine| {
         let ctx = ctx.clone();
-        let config = config.clone();
-        set.spawn(async move { machine_configure(&ctx, &config).await });
-    }
-    for result in set.join_all().await {
-        result?;
-    }
+        let config = configs.iter().find(|c| c.machine == machine).unwrap();
+        async move { machine_configure(&ctx, &config).await }
+    })
+    .await?;
     Ok(())
 }
 
