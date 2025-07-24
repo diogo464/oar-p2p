@@ -579,7 +579,9 @@ async fn machine_containers_save_logs(
 async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Path) -> Result<()> {
     tracing::info!("copying container logs from machine");
 
-    let mut rsync_rsh = format!("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null");
+    let mut rsync_rsh = format!(
+        "ssh -o ConnectionAttempts=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    );
     if ctx.node == ExecutionNode::Unknown {
         rsync_rsh += &format!(" -J {}", ctx.frontend_hostname()?);
     }
@@ -673,6 +675,8 @@ async fn machine_run(
     stdin: Option<&str>,
 ) -> Result<Output> {
     let ssh_common = &[
+        "-o",
+        "ConnectionAttempts=3",
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
