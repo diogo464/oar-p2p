@@ -578,35 +578,27 @@ async fn machine_containers_save_logs(
 #[tracing::instrument(ret, err, skip(ctx))]
 async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Path) -> Result<()> {
     tracing::info!("copying container logs from machine");
-    let scp_common = &[
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-    ];
 
-    let mut args = vec![];
-    args.extend(scp_common);
+    let mut rsync_rsh = format!("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null");
     if ctx.node == ExecutionNode::Unknown {
-        args.push("-J");
-        args.push(ctx.frontend_hostname()?);
+        rsync_rsh += &format!(" -J {}", ctx.frontend_hostname()?);
     }
-    args.push("-r");
 
-    let source_path = format!("{}:/tmp/oar-p2p-logs/*", machine.hostname());
-    let destination_path = output_dir.display().to_string();
-    args.push(&source_path);
-    args.push(&destination_path);
-
-    let output = Command::new("scp").args(args).output().await?;
+    let output = Command::new("rsync")
+        .env("RSYNC_RSH", rsync_rsh)
+        .arg("-avz")
+        .arg(format!("{}:/tmp/oar-p2p-logs/", machine.hostname()))
+        .arg(output_dir.display().to_string())
+        .output()
+        .await?;
     let stdout = std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf-8>");
     let stderr = std::str::from_utf8(&output.stderr).unwrap_or("<invalid utf-8>");
     if output.status.success() {
-        tracing::trace!("scp stdout:\n{stdout}");
-        tracing::trace!("scp stderr:\n{stderr}");
+        tracing::trace!("rsync stdout:\n{stdout}");
+        tracing::trace!("rsync stderr:\n{stderr}");
     } else {
-        tracing::error!("scp stdout:\n{stdout}");
-        tracing::error!("scp stderr:\n{stderr}");
+        tracing::error!("rsync stdout:\n{stdout}");
+        tracing::error!("rsync stderr:\n{stderr}");
     }
     output.exit_ok()?;
     tracing::info!("logs finished copying");
