@@ -544,7 +544,23 @@ async fn machine_containers_wait(
 ) -> Result<()> {
     tracing::info!("waiting for {} containers to exit", containers.len());
     let script = machine_containers_wait_script(containers);
-    machine_run_script(ctx, machine, &script).await?;
+    let retry_seconds = 5;
+    let mut retries = 10;
+    loop {
+        match machine_run_script(ctx, machine, &script).await {
+            Ok(_) => break,
+            Err(err) => {
+                tracing::debug!("failed to run script: {err}, {retries} left");
+                if retries == 0 {
+                    return Err(err);
+                }
+                retries -= 1;
+                tracing::debug!("waiting {retry_seconds} before retrying...");
+                tokio::time::sleep(Duration::from_secs(retry_seconds)).await;
+                tracing::debug!("retrying");
+            }
+        }
+    }
     tracing::info!("all containers exited");
     Ok(())
 }
