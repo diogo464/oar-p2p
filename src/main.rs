@@ -125,6 +125,9 @@ struct NetDownArgs {
 struct NetShowArgs {
     #[clap(flatten)]
     common: Common,
+
+    #[clap(long)]
+    interleave: bool,
 }
 
 #[derive(Debug, Args)]
@@ -265,8 +268,26 @@ async fn cmd_net_show(args: NetShowArgs) -> Result<()> {
         }
     }
     addresses.sort();
-    for (machine, addr) in addresses {
-        println!("{machine} {addr}");
+    if !args.interleave {
+        for (machine, addr) in addresses {
+            println!("{machine} {addr}");
+        }
+    } else {
+        let mut addrs_per_machine: HashMap<Machine, Vec<Ipv4Addr>> = Default::default();
+        for (machine, addr) in addresses {
+            addrs_per_machine.entry(machine).or_default().push(addr);
+        }
+        while !addrs_per_machine.is_empty() {
+            for machine in &machines {
+                if let Some(addrs) = addrs_per_machine.get_mut(machine) {
+                    if let Some(addr) = addrs.pop() {
+                        println!("{machine} {addr}");
+                    } else {
+                        addrs_per_machine.remove(machine);
+                    }
+                };
+            }
+        }
     }
     Ok(())
 }
