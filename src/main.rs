@@ -1010,7 +1010,7 @@ fn machine_generate_configs(
 
         for iface in &["lo", machine.interface()] {
             machine_tc_commands.push(format!(
-                "qdisc add dev {iface} root handle 1: htb default 9999"
+                "qdisc add dev {iface} root handle 1: htb default 9999 r2q 100000"
             ));
             machine_tc_commands.push(format!(
                 "class add dev {iface} parent 1: classid 1:9999 htb rate 10gbit"
