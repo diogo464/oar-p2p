@@ -878,6 +878,11 @@ async fn machine_clean(ctx: &Context, machine: Machine) -> Result<()> {
 
 fn machine_configuration_script(config: &MachineConfig) -> String {
     let mut script = String::default();
+    // arp cache limit increase
+    script.push_str("echo 8192 > /proc/sys/net/ipv4/neigh/default/gc_thresh1\n");
+    script.push_str("echo 16384 > /proc/sys/net/ipv4/neigh/default/gc_thresh2\n");
+    script.push_str("echo 32768 > /proc/sys/net/ipv4/neigh/default/gc_thresh3\n");
+
     // ip configuration
     script.push_str("cat << EOF | ip -b -\n");
     for command in config.ip_commands.iter() {
