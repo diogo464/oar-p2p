@@ -1038,6 +1038,21 @@ fn machine_generate_configs(
         }
 
         machine_nft_script.push_str("table ip oar-p2p {\n");
+        machine_nft_script.push_str(
+            r#"
+    chain prerouting {
+        type filter hook prerouting priority raw;
+        ip saddr 10.0.0.0/8 notrack
+        ip daddr 10.0.0.0/8 notrack
+    }
+    chain output {
+        type filter hook output priority raw;
+        ip saddr 10.0.0.0/8 notrack
+        ip daddr 10.0.0.0/8 notrack
+    }
+"#,
+        );
+
         machine_nft_script.push_str("\tmap mark_pairs {\n");
         machine_nft_script.push_str("\t\ttype ipv4_addr . ipv4_addr : mark\n");
         machine_nft_script.push_str("\t\telements = {\n");
