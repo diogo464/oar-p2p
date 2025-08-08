@@ -883,6 +883,9 @@ fn machine_configuration_script(config: &MachineConfig) -> String {
     script.push_str("echo 16384 > /proc/sys/net/ipv4/neigh/default/gc_thresh2\n");
     script.push_str("echo 32768 > /proc/sys/net/ipv4/neigh/default/gc_thresh3\n");
 
+    // tcp max orphan limit
+    script.push_str("echo 524288 > /proc/sys/net/ipv4/tcp_max_orphans\n");
+
     // ip configuration
     script.push_str("cat << EOF | ip -b -\n");
     for command in config.ip_commands.iter() {
