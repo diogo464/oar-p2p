@@ -549,7 +549,7 @@ fn machine_containers_wait_script(containers: &[ScheduledContainer]) -> String {
             "if [ \"$(docker wait {name})\" -ne \"0\" ] ; then\n"
         ));
         script.push_str(&format!("\techo Container {name} failed\n"));
-        script.push_str(&format!("\tdocker logs {name} 2>&1\n"));
+        script.push_str(&format!("\tdocker logs {name} 2>&1 | tail -n 500\n"));
         script.push_str("\texit 1\n");
         script.push_str("fi\n\n");
     }
