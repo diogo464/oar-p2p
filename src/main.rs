@@ -62,6 +62,7 @@ struct Common {
 enum SubCmd {
     Net(NetArgs),
     Run(RunArgs),
+    Clean(CleanArgs),
 }
 
 #[derive(Debug, Args)]
@@ -188,6 +189,12 @@ struct RunArgs {
     schedule: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+struct CleanArgs {
+    #[clap(flatten)]
+    common: Common,
+}
+
 #[derive(Debug, Clone)]
 struct MachineConfig {
     machine: Machine,
@@ -217,6 +224,7 @@ async fn main() -> Result<()> {
             NetSubCmd::Preview(args) => cmd_net_preview(args).await,
         },
         SubCmd::Run(args) => cmd_run(args).await,
+        SubCmd::Clean(args) => cmd_clean(args).await,
     }
 }
 
@@ -466,6 +474,18 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
     )
     .await?;
 
+    Ok(())
+}
+
+async fn cmd_clean(args: CleanArgs) -> Result<()> {
+    let context = context_from_common(&args.common).await?;
+    let machines = oar::job_list_machines(&context).await?;
+    machines_net_container_build(&context, &machines).await?;
+    machine::for_each(&machines, |machine| {
+        machine_containers_clean(&context, machine)
+    })
+    .await?;
+    machines_clean(&context, &machines).await?;
     Ok(())
 }
 
