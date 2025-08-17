@@ -153,7 +153,16 @@ fn extract_job_ids_from_oarstat_output(output: &str) -> Result<Vec<u32>> {
     };
 
     let mut job_ids = Vec::default();
-    for key in object.keys() {
+    for (key, val) in object.iter() {
+        if val
+            .get("state")
+            .expect("job should have a 'state' key")
+            .as_str()
+            .expect("job state should be a string")
+            != "Running"
+        {
+            continue;
+        }
         tracing::trace!("parsing key '{key}'");
         let job_id = key.parse()?;
         job_ids.push(job_id);
