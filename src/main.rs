@@ -496,13 +496,21 @@ async fn cmd_clean(args: CleanArgs) -> Result<()> {
 }
 
 fn machine_containers_create_script(containers: &[ScheduledContainer]) -> String {
+    let images = containers
+        .iter()
+        .map(|c| c.image.clone())
+        .collect::<HashSet<_>>();
+
     let mut script = String::default();
+
+    for image in images {
+        script.push_str(&format!("docker pull {} || exit 1\n", image));
+    }
+
     for (idx, container) in containers.iter().enumerate() {
         // remove the start signal file if it exists
         script.push_str("mkdir -p /tmp/oar-p2p-signal\n");
         script.push_str("rm /tmp/oar-p2p-signal/start 2>/dev/null || true\n");
-
-        script.push_str(&format!("docker pull {} || exit 1\n", container.image));
 
         script.push_str("docker create \\\n");
         script.push_str("\t--pull=never \\\n");
