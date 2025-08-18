@@ -114,6 +114,9 @@ struct NetUpArgs {
     /// 99.91315 110.71518 93.90618 84.67561 0.0 {n}
     #[clap(long)]
     latency_matrix: PathBuf,
+
+    #[clap(long)]
+    matrix_wrap: bool,
 }
 
 #[derive(Debug, Args)]
@@ -141,6 +144,9 @@ struct NetPreviewArgs {
 
     #[clap(long)]
     latency_matrix: PathBuf,
+
+    #[clap(long)]
+    matrix_wrap: bool,
 }
 
 #[derive(Debug, Args)]
@@ -245,7 +251,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
     let machines = oar::job_list_machines(&context).await?;
-    let configs = machine_generate_configs(&matrix, &machines, &args.addresses)?;
+    let configs = machine_generate_configs(&matrix, args.matrix_wrap, &machines, &args.addresses)?;
     machines_net_container_build(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
     machines_configure(&context, &configs).await?;
@@ -307,7 +313,7 @@ async fn cmd_net_preview(args: NetPreviewArgs) -> Result<()> {
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
     let machines = args.machine;
-    let configs = machine_generate_configs(&matrix, &machines, &args.addresses)?;
+    let configs = machine_generate_configs(&matrix, args.matrix_wrap, &machines, &args.addresses)?;
 
     for config in configs {
         (0..20).for_each(|_| print!("-"));
@@ -955,6 +961,7 @@ fn machine_address_for_idx(machine: Machine, idx: u32) -> Ipv4Addr {
 
 fn machine_generate_configs(
     matrix: &LatencyMatrix,
+    matrix_wrap: bool,
     machines: &[Machine],
     addr_policy: &AddressAllocationPolicy,
 ) -> Result<Vec<MachineConfig>> {
@@ -1003,12 +1010,14 @@ fn machine_generate_configs(
             .push(address);
     }
 
-    if addresses.len() > matrix.dimension() {
-        return Err(eyre::eyre!(
-            "latency matrix is too small, size is {} but {} was required",
-            matrix.dimension(),
-            addresses.len()
-        ));
+    if !matrix_wrap {
+        if addresses.len() > matrix.dimension() {
+            return Err(eyre::eyre!(
+                "latency matrix is too small, size is {} but {} was required",
+                matrix.dimension(),
+                addresses.len()
+            ));
+        }
     }
 
     for &machine in machines {
@@ -1029,7 +1038,13 @@ fn machine_generate_configs(
             let addr_idx = address_to_index[&addr];
             for other_idx in (0..addresses.len()).filter(|i| *i != addr_idx) {
                 let other = addresses[other_idx];
-                let latency = matrix.latency(addr_idx, other_idx);
+                let latency = match matrix_wrap {
+                    true => matrix.latency(
+                        addr_idx % matrix.dimension(),
+                        other_idx % matrix.dimension(),
+                    ),
+                    false => matrix.latency(addr_idx, other_idx),
+                };
                 let latency_millis = u32::try_from(latency.as_millis()).unwrap();
                 if !latencies_set.contains(&latency_millis) {
                     latencies_set.insert(latency_millis);
