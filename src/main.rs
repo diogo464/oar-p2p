@@ -502,8 +502,10 @@ fn machine_containers_create_script(containers: &[ScheduledContainer]) -> String
         script.push_str("mkdir -p /tmp/oar-p2p-signal\n");
         script.push_str("rm /tmp/oar-p2p-signal/start 2>/dev/null || true\n");
 
+        script.push_str(&format!("docker pull {} || exit 1\n", container.image));
+
         script.push_str("docker create \\\n");
-        script.push_str("\t--pull=always \\\n");
+        script.push_str("\t--pull=never \\\n");
         script.push_str("\t--network=host \\\n");
         script.push_str("\t--restart=no \\\n");
         script.push_str("\t--volume /tmp/oar-p2p-signal:/oar-p2p\\\n");
