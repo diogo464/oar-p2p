@@ -252,6 +252,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
         .context("parsing latency matrix")?;
     let machines = oar::job_list_machines(&context).await?;
     let configs = machine_generate_configs(&matrix, args.matrix_wrap, &machines, &args.addresses)?;
+    machines_containers_clean(&context, &machines).await?;
     machines_net_container_build(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
     machines_configure(&context, &configs).await?;
@@ -261,6 +262,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
 async fn cmd_net_down(args: NetDownArgs) -> Result<()> {
     let context = context_from_common(&args.common).await?;
     let machines = oar::job_list_machines(&context).await?;
+    machines_containers_clean(&context, &machines).await?;
     machines_net_container_build(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
     Ok(())
@@ -400,7 +402,7 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
     let containers = parse_schedule(&schedule)?;
     let machines = oar::job_list_machines(&ctx).await?;
 
-    machine::for_each(&machines, |machine| machine_containers_clean(&ctx, machine)).await?;
+    machines_containers_clean(&ctx, &machines).await?;
     machine::for_each(&machines, |machine| {
         let ctx = ctx.clone();
         let containers = containers
@@ -487,10 +489,7 @@ async fn cmd_clean(args: CleanArgs) -> Result<()> {
     let context = context_from_common(&args.common).await?;
     let machines = oar::job_list_machines(&context).await?;
     machines_net_container_build(&context, &machines).await?;
-    machine::for_each(&machines, |machine| {
-        machine_containers_clean(&context, machine)
-    })
-    .await?;
+    machines_containers_clean(&context, &machines).await?;
     machines_clean(&context, &machines).await?;
     Ok(())
 }
@@ -702,6 +701,12 @@ async fn machines_clean(ctx: &Context, machines: &[Machine]) -> Result<()> {
         async move { machine_clean(&ctx, machine).await }
     })
     .await?;
+    Ok(())
+}
+
+#[tracing::instrument(ret, err, skip_all)]
+async fn machines_containers_clean(ctx: &Context, machines: &[Machine]) -> Result<()> {
+    machine::for_each(machines, |machine| machine_containers_clean(&ctx, machine)).await?;
     Ok(())
 }
 
