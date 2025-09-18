@@ -77,4 +77,5 @@ async fn get_hostname() -> Result<String> {
     } else {
         std::env::var("HOSTNAME").context("reading HOSTNAME env var")
     }
+    .map(|hostname| hostname.trim().to_string())
 }
