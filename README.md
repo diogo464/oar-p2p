@@ -101,17 +101,21 @@ afer having setup the network, how you run the experiments is up to you, but `oa
 
 the subcommand is `oar-p2p run` and it requires a "schedule" file to run. a schedule is a json array of objects, where each object describes a container to be executed. here is an example:
 ```bash
-cat << EOF | oar-p2p run --output-dir logs
+export ADDRESS_0=$(oar-p2p net show | cut -d' ' -f2 | head -n 1)
+export ADDRESS_1=$(oar-p2p net show | cut -d' ' -f2 | head -n 2 | tail -n 1)
+echo "Address 0 = $ADDRESS_0"
+echo "Address 1 = $ADDRESS_1"
+cat << EOF | oar-p2p run --signal start:5 --output-dir logs
 [
     { 
-        "address": "10.16.0.1", 
+        "address": "$ADDRESS_0", 
         "image": "ghcr.io/diogo464/oar-p2p/demo:latest", 
-        "env": { "ADDRESS": "10.16.0.1", "REMOTE": "10.17.0.1", "MESSAGE": "I am container 1" }
+        "env": { "ADDRESS": "$ADDRESS_0", "REMOTE": "$ADDRESS_1", "MESSAGE": "I am container 1" }
     },
     { 
-        "address": "10.17.0.1", 
+        "address": "$ADDRESS_1", 
         "image": "ghcr.io/diogo464/oar-p2p/demo:latest", 
-        "env": { "ADDRESS": "10.17.0.1", "REMOTE": "10.16.0.1", "MESSAGE": "I am container 2" }
+        "env": { "ADDRESS": "$ADDRESS_1", "REMOTE": "$ADDRESS_0", "MESSAGE": "I am container 2" }
     }
 ]
 EOF
