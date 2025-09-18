@@ -4,7 +4,7 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::Output,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use clap::{Args, Parser, Subcommand};
@@ -436,11 +436,12 @@ async fn cmd_run(args: RunArgs) -> Result<()> {
         tokio::time::sleep_until(expire.into()).await;
 
         tracing::info!("triggering signal {}", spec.signal);
+        let signal_timestamp = unix_timestamp();
         machine::for_each(
             machines
                 .iter()
                 .filter(|&machine| containers.iter().any(|c| c.machine == *machine)),
-            |machine| machine_signal_containers(&ctx, machine, &spec.signal),
+            |machine| machine_signal_containers(&ctx, machine, &spec.signal, signal_timestamp),
         )
         .await?;
     }
@@ -569,9 +570,19 @@ async fn machine_start_containers(ctx: &Context, machine: Machine) -> Result<()>
 }
 
 #[tracing::instrument(ret, err, skip(ctx))]
-async fn machine_signal_containers(ctx: &Context, machine: Machine, signal: &Signal) -> Result<()> {
+async fn machine_signal_containers(
+    ctx: &Context,
+    machine: Machine,
+    signal: &Signal,
+    timestamp: u64,
+) -> Result<()> {
     tracing::info!("signaling containers");
-    machine_run_script(ctx, machine, &format!("touch /tmp/oar-p2p-signal/{signal}")).await?;
+    machine_run_script(
+        ctx,
+        machine,
+        &format!("echo -n {timestamp} > /tmp/oar-p2p-signal/{signal}.tmp ; mv /tmp/oar-p2p-signal/{signal}.tmp /tmp/oar-p2p-signal/{signal}"),
+    )
+    .await?;
     tracing::info!("containers signaled");
     Ok(())
 }
@@ -1152,4 +1163,11 @@ fn machine_generate_configs(
         });
     }
     Ok(configs)
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
