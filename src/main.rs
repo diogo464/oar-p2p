@@ -778,8 +778,9 @@ async fn machine_run(
     stdin: Option<&str>,
 ) -> Result<Output> {
     let ssh_common = &[
+        "-vvv",
         "-o",
-        "ConnectionAttempts=3",
+        "ConnectionAttempts=10",
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
