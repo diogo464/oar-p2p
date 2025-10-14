@@ -245,11 +245,19 @@ async fn context_from_common(common: &Common) -> Result<Context> {
 
 async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
     let context = context_from_common(&args.common).await?;
+
+    tracing::debug!(
+        "reading latency matrix at {}",
+        args.latency_matrix.display()
+    );
     let matrix_content = tokio::fs::read_to_string(&args.latency_matrix)
         .await
         .context("reading latecy matrix")?;
+
+    tracing::debug!("parsing latency matrix");
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
         .context("parsing latency matrix")?;
+
     let machines = oar::job_list_machines(&context).await?;
     let configs = machine_generate_configs(&matrix, args.matrix_wrap, &machines, &args.addresses)?;
     machines_containers_clean(&context, &machines).await?;
