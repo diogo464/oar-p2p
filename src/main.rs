@@ -953,6 +953,10 @@ fn machine_configuration_script(config: &MachineConfig) -> String {
     // tcp max orphan limit
     script.push_str("echo 524288 > /proc/sys/net/ipv4/tcp_max_orphans\n");
 
+    // exit docker swarm and remove all networks
+    script.push_str("docker swarm leave || true\n");
+    script.push_str("docker network ls -q | xargs docker network rm -f || true\n");
+
     // ip configuration
     script.push_str("cat << EOF | ip -b -\n");
     for command in config.ip_commands.iter() {
