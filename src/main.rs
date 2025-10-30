@@ -242,13 +242,10 @@ async fn context_from_common(common: &Common) -> Result<Context> {
     )
     .await?;
 
-    match ctx.node {
-        ExecutionNode::Machine(_) => {
-            tracing::warn!(
-                "executing oar-p2p from a job machine is not currently support, run from the frontend or your own machine"
-            );
-        }
-        _ => {}
+    if let ExecutionNode::Machine(_) = ctx.node {
+        tracing::warn!(
+            "executing oar-p2p from a job machine is not currently support, run from the frontend or your own machine"
+        );
     }
 
     Ok(ctx)
@@ -688,9 +685,7 @@ async fn machine_containers_save_logs(
 async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Path) -> Result<()> {
     tracing::info!("copying container logs from machine");
 
-    let mut rsync_rsh = format!(
-        "ssh -o ConnectionAttempts=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    );
+    let mut rsync_rsh = "ssh -o ConnectionAttempts=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null".to_string();
     if ctx.node == ExecutionNode::Unknown {
         rsync_rsh += &format!(" -J {}", ctx.frontend_hostname()?);
     }
@@ -737,7 +732,7 @@ async fn machines_clean(ctx: &Context, machines: &[Machine]) -> Result<()> {
 
 #[tracing::instrument(ret, err, skip_all)]
 async fn machines_containers_clean(ctx: &Context, machines: &[Machine]) -> Result<()> {
-    machine::for_each(machines, |machine| machine_containers_clean(&ctx, machine)).await?;
+    machine::for_each(machines, |machine| machine_containers_clean(ctx, machine)).await?;
     Ok(())
 }
 
@@ -759,7 +754,7 @@ async fn machines_configure(ctx: &Context, configs: &[MachineConfig]) -> Result<
     machine::for_each(machines, |machine| {
         let ctx = ctx.clone();
         let config = configs.iter().find(|c| c.machine == machine).unwrap();
-        async move { machine_configure(&ctx, &config).await }
+        async move { machine_configure(&ctx, config).await }
     })
     .await?;
     Ok(())
@@ -1066,15 +1061,14 @@ fn machine_generate_configs(
             .push(address);
     }
 
-    if !matrix_wrap {
-        if addresses.len() > matrix.dimension() {
+    if !matrix_wrap
+        && addresses.len() > matrix.dimension() {
             return Err(eyre::eyre!(
                 "latency matrix is too small, size is {} but {} was required",
                 matrix.dimension(),
                 addresses.len()
             ));
         }
-    }
 
     for &machine in machines {
         let machine_addresses = &addresses_per_machine[&machine];
