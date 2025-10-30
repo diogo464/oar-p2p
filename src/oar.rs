@@ -138,6 +138,13 @@ fn extract_machines_from_oar_stat_json(output: &str, job_id: u32) -> Result<Vec<
             None => return Err(eyre::eyre!("unknown machine: '{hostname}'")),
         }
     }
+
+    if machines.is_empty() {
+        tracing::warn!(
+            "unable to find any machines for job id {job_id}. perhaps the job is not yet in the running state?"
+        );
+    }
+
     Ok(machines)
 }
 

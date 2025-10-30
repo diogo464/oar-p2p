@@ -1004,6 +1004,10 @@ fn machine_generate_configs(
     machines: &[Machine],
     addr_policy: &AddressAllocationPolicy,
 ) -> Result<Vec<MachineConfig>> {
+    if machines.is_empty() {
+        return Err(eyre::eyre!("cannot generate config for zero machines"));
+    }
+
     let mut configs = Vec::default();
     let mut addresses = Vec::default();
     let mut address_to_index = HashMap::<Ipv4Addr, usize>::default();
