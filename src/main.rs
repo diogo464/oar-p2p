@@ -346,6 +346,7 @@ struct ScheduledContainer {
     name: String,
     image: String,
     machine: Machine,
+    #[allow(unused)]
     address: Ipv4Addr,
     variables: HashMap<String, String>,
 }
