@@ -141,7 +141,10 @@ define_machines!(
     (Squirtle4, 53, "squirtle-4", 24, "bond0"),
     (Staryu1, 54, "staryu-1", 12, todo!()),
     (Sudowoodo1, 55, "sudowoodo-1", 16, todo!()),
-    (Vulpix1, 56, "vulpix-1", 112, todo!())
+    (Vulpix1, 56, "vulpix-1", 112, todo!()),
+    (Snorlax01, 57, "snorlax-01", 64, "bond0"),
+    (Snorlax02, 58, "snorlax-02", 64, "bond0"),
+    (Snorlax03, 59, "snorlax-03", 64, "bond0")
 );
 
 pub async fn for_each<F, FUT, RET>(
