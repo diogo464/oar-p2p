@@ -19,9 +19,9 @@ cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
 
 ### 4. install the tool
 to install the tool you have a few options.
-+ 1. install using cargo (`cargo install --locked --git https://github.com/diogo464/oar-p2p`)
++ 1. install using cargo ([requires rust nightly](https://rust-lang.github.io/rustup/concepts/channels.html)): `cargo install --locked --git https://github.com/diogo464/oar-p2p`
 + 2. download and extract the binary from one the release assets [https://github.com/diogo464/oar-p2p/releases/latest](https://github.com/diogo464/oar-p2p/releases/latest)
-+ 3. clone and compile from source
++ 3. clone and compile from source ([requires rust nightly](https://rust-lang.github.io/rustup/concepts/channels.html))
 
 just make sure the binary ends up somewhere in your `PATH`.
 
