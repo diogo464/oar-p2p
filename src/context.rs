@@ -1,4 +1,4 @@
-use eyre::{Context as _, Result};
+use eyre::Result;
 
 use crate::machine::Machine;
 
@@ -60,7 +60,7 @@ impl Context {
 }
 
 async fn get_execution_node() -> Result<ExecutionNode> {
-    let hostname = get_hostname().await?;
+    let hostname = get_hostname().await;
     let node = match hostname.as_str() {
         "frontend" => ExecutionNode::Frontend,
         _ => match Machine::from_hostname(&hostname) {
@@ -71,11 +71,14 @@ async fn get_execution_node() -> Result<ExecutionNode> {
     Ok(node)
 }
 
-async fn get_hostname() -> Result<String> {
-    if let Ok(hostname) = tokio::fs::read_to_string("/etc/hostname").await {
-        Ok(hostname)
+async fn get_hostname() -> String {
+    let hostname = if let Ok(hostname) = tokio::fs::read_to_string("/etc/hostname").await {
+        hostname
+    } else if let Ok(hostname) = std::env::var("HOSTNAME") {
+        hostname
     } else {
-        std::env::var("HOSTNAME").context("reading HOSTNAME env var")
-    }
-    .map(|hostname| hostname.trim().to_string())
+        tracing::warn!("unable to obtain hostname, using empty string");
+        String::default()
+    };
+    hostname.trim().to_string()
 }

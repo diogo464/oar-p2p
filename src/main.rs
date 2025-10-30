@@ -1033,7 +1033,8 @@ fn machine_generate_configs(
         AddressAllocationPolicy::Total(n) => {
             let mut counter = 0;
             while counter < *n {
-                let machine = machines[(counter as usize) % machines.len()];
+                let machine = machines[(counter as usize) % machines.len()]; // TODO: proper error
+                // message for panic here
                 let address = machine_address_for_idx(machine, counter / (machines.len() as u32));
                 addresses.push(address);
                 counter += 1;
