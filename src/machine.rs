@@ -134,7 +134,7 @@ define_machines!(
     (Psyduck1, 46, "psyduck-1", 8, "bond0"),
     (Psyduck2, 47, "psyduck-2", 8, "bond0"),
     (Psyduck3, 48, "psyduck-3", 8, "bond0"),
-    (Shelder1, 49, "shelder-1", 64, todo!()),
+    (Shelder1, 49, "shelder-1", 64, "bond0"),
     (Squirtle1, 50, "squirtle-1", 24, "bond0"),
     (Squirtle2, 51, "squirtle-2", 24, "bond0"),
     (Squirtle3, 52, "squirtle-3", 24, "bond0"),
