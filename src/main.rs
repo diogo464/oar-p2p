@@ -235,12 +235,23 @@ async fn main() -> Result<()> {
 }
 
 async fn context_from_common(common: &Common) -> Result<Context> {
-    Context::new(
+    let ctx = Context::new(
         common.job_id,
         common.infer_job_id,
         common.frontend_hostname.clone(),
     )
-    .await
+    .await?;
+
+    match ctx.node {
+        ExecutionNode::Machine(_) => {
+            tracing::warn!(
+                "executing oar-p2p from a job machine is not currently support, run from the frontend or your own machine"
+            );
+        }
+        _ => {}
+    }
+
+    Ok(ctx)
 }
 
 async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
