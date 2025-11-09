@@ -961,7 +961,7 @@ fn machine_configuration_script(config: &MachineConfig) -> String {
     script.push_str("echo 524288 > /proc/sys/net/ipv4/tcp_max_orphans\n");
 
     // exit docker swarm and remove all networks
-    script.push_str("docker swarm leave || true\n");
+    script.push_str("docker swarm leave --force || true\n");
     script.push_str("docker network ls -q | xargs docker network rm -f || true\n");
 
     // ip configuration
