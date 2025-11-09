@@ -34,6 +34,7 @@ pub mod signal;
 const CONTAINER_IMAGE_NAME: &str = "local/oar-p2p-networking";
 
 #[derive(Debug, Parser)]
+#[command(version = env!("GIT_VERSION"))]
 struct Cli {
     #[clap(subcommand)]
     cmd: SubCmd,
