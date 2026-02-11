@@ -15,7 +15,7 @@ pub struct Context {
     job_id: Option<u32>,
     infer_job_id: bool,
     frontend_hostname: Option<String>,
-    cluster_username: Option<String>
+    cluster_username: Option<String>,
 }
 
 impl Context {
@@ -23,14 +23,14 @@ impl Context {
         job_id: Option<u32>,
         infer_job_id: bool,
         frontend_hostname: Option<String>,
-        cluster_username: Option<String>
+        cluster_username: Option<String>,
     ) -> Result<Self> {
         Ok(Self {
             node: get_execution_node().await?,
             job_id,
             infer_job_id,
             frontend_hostname,
-            cluster_username
+            cluster_username,
         })
     }
 

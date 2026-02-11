@@ -153,4 +153,3 @@ mod tests {
         assert!(AddressAllocationPolicy::from_str("10/ cpu").is_err());
     }
 }
-

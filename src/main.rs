@@ -61,7 +61,6 @@ struct Common {
     /// cluster username, needed if running locally with differing usernames
     #[clap(long, env = "CLUSTER_USERNAME")]
     cluster_username: Option<String>,
-
 }
 
 #[derive(Debug, Subcommand)]
@@ -245,7 +244,7 @@ async fn context_from_common(common: &Common) -> Result<Context> {
         common.job_id,
         common.infer_job_id,
         common.frontend_hostname.clone(),
-        common.cluster_username.clone()
+        common.cluster_username.clone(),
     )
     .await?;
 
@@ -692,7 +691,9 @@ async fn machine_containers_save_logs(
 async fn machine_copy_logs_dir(ctx: &Context, machine: Machine, output_dir: &Path) -> Result<()> {
     tracing::info!("copying container logs from machine");
 
-    let mut rsync_rsh = "ssh -o ConnectionAttempts=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null".to_string();
+    let mut rsync_rsh =
+        "ssh -o ConnectionAttempts=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            .to_string();
     if ctx.node == ExecutionNode::Unknown {
         rsync_rsh += &format!(" -J {}", ctx.frontend_hostname()?);
     }
@@ -828,9 +829,9 @@ async fn machine_run(
             arguments.push("-J");
             arguments.push(frontend);
             if ctx.cluster_username().is_ok() {
-                    arguments.push("-l");
-                    arguments.push(ctx.cluster_username()?);
-                }
+                arguments.push("-l");
+                arguments.push(ctx.cluster_username()?);
+            }
             arguments.push(machine.hostname());
             arguments
         }
@@ -1072,14 +1073,13 @@ fn machine_generate_configs(
             .push(address);
     }
 
-    if !matrix_wrap
-        && addresses.len() > matrix.dimension() {
-            return Err(eyre::eyre!(
-                "latency matrix is too small, size is {} but {} was required",
-                matrix.dimension(),
-                addresses.len()
-            ));
-        }
+    if !matrix_wrap && addresses.len() > matrix.dimension() {
+        return Err(eyre::eyre!(
+            "latency matrix is too small, size is {} but {} was required",
+            matrix.dimension(),
+            addresses.len()
+        ));
+    }
 
     for &machine in machines {
         let machine_addresses = &addresses_per_machine[&machine];
