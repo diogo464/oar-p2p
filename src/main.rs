@@ -57,6 +57,11 @@ struct Common {
     /// i.e. `ssh <frontend-hostname>` should work.
     #[clap(long, env = "FRONTEND_HOSTNAME")]
     frontend_hostname: Option<String>,
+
+    /// cluster username, needed if running locally with differing usernames
+    #[clap(long, env = "CLUSTER_USERNAME")]
+    cluster_username: Option<String>,
+
 }
 
 #[derive(Debug, Subcommand)]
@@ -240,12 +245,13 @@ async fn context_from_common(common: &Common) -> Result<Context> {
         common.job_id,
         common.infer_job_id,
         common.frontend_hostname.clone(),
+        common.cluster_username.clone()
     )
     .await?;
 
     if let ExecutionNode::Machine(_) = ctx.node {
         tracing::warn!(
-            "executing oar-p2p from a job machine is not currently support, run from the frontend or your own machine"
+            "executing oar-p2p from a job machine is not currently supported, run from the frontend or your own machine"
         );
     }
 
@@ -261,7 +267,7 @@ async fn cmd_net_up(args: NetUpArgs) -> Result<()> {
     );
     let matrix_content = tokio::fs::read_to_string(&args.latency_matrix)
         .await
-        .context("reading latecy matrix")?;
+        .context("reading latency matrix")?;
 
     tracing::debug!("parsing latency matrix");
     let matrix = LatencyMatrix::parse(&matrix_content, latency_matrix::TimeUnit::Milliseconds)
@@ -821,6 +827,10 @@ async fn machine_run(
             arguments.extend(ssh_common);
             arguments.push("-J");
             arguments.push(frontend);
+            if ctx.cluster_username().is_ok() {
+                    arguments.push("-l");
+                    arguments.push(ctx.cluster_username()?);
+                }
             arguments.push(machine.hostname());
             arguments
         }

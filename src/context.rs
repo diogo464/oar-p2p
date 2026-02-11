@@ -15,6 +15,7 @@ pub struct Context {
     job_id: Option<u32>,
     infer_job_id: bool,
     frontend_hostname: Option<String>,
+    cluster_username: Option<String>
 }
 
 impl Context {
@@ -22,12 +23,14 @@ impl Context {
         job_id: Option<u32>,
         infer_job_id: bool,
         frontend_hostname: Option<String>,
+        cluster_username: Option<String>
     ) -> Result<Self> {
         Ok(Self {
             node: get_execution_node().await?,
             job_id,
             infer_job_id,
             frontend_hostname,
+            cluster_username
         })
     }
 
@@ -56,6 +59,12 @@ impl Context {
         self.frontend_hostname
             .as_deref()
             .ok_or_else(|| eyre::eyre!("missing frontend hostname"))
+    }
+
+    pub fn cluster_username(&self) -> Result<&str> {
+        self.cluster_username
+            .as_deref()
+            .ok_or_else(|| eyre::eyre!("missing cluster username"))
     }
 }
 
